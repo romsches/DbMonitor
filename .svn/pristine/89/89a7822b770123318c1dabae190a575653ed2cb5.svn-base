@@ -1,0 +1,874 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using Bsd.Data.BL;
+using Bsd.Data.DependencyInjection;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Microsoft.Extensions.Logging;
+using Oracle.ManagedDataAccess.Client;
+using PoorMansTSqlFormatterLib;
+using System.Data;
+
+namespace Bsd.DbMonitorData
+{
+  /// <summary>
+  /// Zentraler Datenzugriff auf Oracle System-Views für das DB-Monitor-Tool.
+  ///
+  /// Stellt typsichere, parametrisierte Abfragen bereit für:
+  ///   – Aktive Sitzungen (V$SESSION)
+  ///   – SQL-Statements und Bind-Variablen (V$SQL, V$SQL_BIND_CAPTURE)
+  ///   – Server-Prozesse (V$PROCESS)
+  ///   – Transaktionssperren (V$LOCK)
+  ///   – Scheduler-Jobs (DBA_SCHEDULER_JOBS)
+  ///fv
+  /// Alle Methoden sind fehlergesichert (try/catch + ILogger),
+  /// NULL-sicher (DBNull.Value) und verwenden parametrisiertes SQL.
+  /// </summary>
+  public class DbQuery : DiDatabaseModel
+  {
+    #region Konstruktor
+
+    /// <summary>
+    /// Initialisiert eine neue Instanz der <see cref="DbQuery"/> Klasse
+    /// mit Dependency Injection für ServiceProvider, OraProvider und Logger.
+    /// </summary>
+    public DbQuery(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<DbQuery> logger)
+      : base(serviceProvider, oraProvider, logger)
+    {
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – Stammdaten
+
+    /// <summary>
+    /// Ruft eine Liste aller Standorte über die Business Logic ab.
+    /// </summary>
+    /// <returns>Eine Liste von SITES-Entitäten.</returns>
+    public List<SITES> Query()
+    {
+      var standortBl = new SITES_BL(OraProvider.OraController);
+      return standortBl.SelectAll();
+    }
+
+    /// <summary>
+    /// Wechselt die aktive Datenbankverbindung dynamisch anhand eines Verbindungs-Alias.
+    /// Der Alias muss in der App.config unter connectionStrings definiert sein
+    /// (z.B. "CTSP", "CTSS", "BWDEMO", "NOTEST", "NOVALID", "NOPROD").
+    /// </summary>
+    /// <param name="dbAlias">Der Name des Verbindungs-Alias aus der App.config.</param>
+    public void SetDatabase(string dbAlias)
+    {
+      var verbindungszeichenfolge = System.Configuration.ConfigurationManager
+        .ConnectionStrings[dbAlias]?.ConnectionString;
+
+      if (string.IsNullOrEmpty(verbindungszeichenfolge))
+      {
+        Logger.LogError("SetDatabase: Verbindungszeichenfolge für '{DbAlias}' nicht gefunden.", dbAlias);
+        return;
+      }
+
+      try
+      {
+        if (OraProvider.OraController.OracleConnection.State == System.Data.ConnectionState.Open)
+          OraProvider.OraController.OracleConnection.Close();
+
+        OraProvider.OraController.OracleConnection.ConnectionString = verbindungszeichenfolge;
+        OraProvider.OraController.OracleConnection.Open();
+
+        Logger.LogInformation("SetDatabase: Verbindung zu '{DbAlias}' erfolgreich hergestellt.", dbAlias);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "SetDatabase: Fehler beim Wechsel zu '{DbAlias}'.", dbAlias);
+        throw;
+      }
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – V$SESSION
+
+    /// <summary>
+    /// Ermittelt alle aktiven Benutzersitzungen aus V$SESSION.
+    /// Enthält erweiterte Felder: MACHINE, TERMINAL, TYPE, LOGON_TIME.
+    /// Hintergrundprozesse (TYPE = 'BACKGROUND') werden ausgeschlossen.
+    /// Sortierung: Status aufsteigend (ACTIVE zuerst), dann SID aufsteigend.
+    /// </summary>
+    /// <returns>Liste aller aktiven Benutzersitzungen.</returns>
+    public List<V_SESSION_MONITOR> GetActiveSessionsList()
+    {
+      var sitzungen = new List<V_SESSION_MONITOR>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetActiveSessionsList: Datenbankverbindung ist nicht initialisiert.");
+        return sitzungen;
+      }
+
+      const string sql = @"
+          SELECT s.sid,
+                 s.serial#    AS serial,
+                 s.username,
+                 s.osuser,
+                 s.machine,
+                 s.terminal,
+                 s.program,
+                 s.type,
+                 s.status,
+                 s.logon_time,
+                 p.spid       AS process_id
+          FROM   v$session s
+          JOIN   v$process p ON s.paddr = p.addr
+          WHERE  s.username IS NOT NULL
+          AND    s.type != 'BACKGROUND'
+          ORDER BY s.status ASC, s.sid ASC";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            sitzungen.Add(new V_SESSION_MONITOR
+            {
+              SID = leser["SID"] != DBNull.Value ? Convert.ToDecimal(leser["SID"]) : (decimal?)null,
+              SERIAL = leser["SERIAL"] != DBNull.Value ? Convert.ToDecimal(leser["SERIAL"]) : (decimal?)null,
+              USERNAME = leser["USERNAME"]?.ToString(),
+              OSUSER = leser["OSUSER"]?.ToString(),
+              MACHINE = leser["MACHINE"]?.ToString(),
+              TERMINAL = leser["TERMINAL"]?.ToString(),
+              PROGRAM = leser["PROGRAM"]?.ToString(),
+              TYPE = leser["TYPE"]?.ToString(),
+              STATUS = leser["STATUS"]?.ToString(),
+              LOGON_TIME = leser["LOGON_TIME"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["LOGON_TIME"]) : null,
+              PROCESS_ID = leser["PROCESS_ID"]?.ToString()
+            });
+          }
+        }
+
+        Logger.LogDebug("GetActiveSessionsList: {Anzahl} Sitzungen geladen.", sitzungen.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetActiveSessionsList.");
+      }
+
+      return sitzungen;
+    }
+
+    /// <summary>
+    /// Ruft den aktuellen SQL-Text und die Bind-Variablen für eine Sitzung ab.
+    ///
+    /// Wichtiger Hinweis zum ORA-00904-Fix:
+    ///   Die proprietäre Funktion FC_GET_BINDVAR_DATA steht nicht auf allen
+    ///   Datenbankumgebungen zur Verfügung. Daher wird hier der Oracle-Standard-View
+    ///   V$SQL_BIND_CAPTURE verwendet, der auf jeder Oracle-Datenbank (ab 10g)
+    ///   verfügbar ist und keine zusätzlichen Berechtigungen benötigt.
+    ///
+    /// SQL-Text: Wird über V$SQL per HASH_VALUE/ADDRESS der aktuellen Session geladen.
+    /// Bind-Variablen: Werden über V$SQL_BIND_CAPTURE zur SQL_ID der Session geladen.
+    /// </summary>
+    /// <param name="sid">Die Session-ID (SID).</param>
+    /// <param name="serial">Die Seriennummer der Sitzung (SERIAL#).</param>
+    /// <returns>Tupel mit formatiertem SQL-Text und Bind-Variablen als lesbarer Text.</returns>
+    public Tuple<string, string> GetCurrentSqlText(decimal sid, decimal serial)
+    {
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetCurrentSqlText: Datenbankverbindung ist nicht initialisiert.");
+        return new Tuple<string, string>("Hinweis: Keine Datenbankverbindung.", string.Empty);
+      }
+
+      // Schritt 1: SQL-Text über V$SQL und V$SESSION laden
+      const string sqlText = @"
+          SELECT q.sql_fulltext AS sql_text,
+                 q.sql_id
+          FROM   v$session s
+          JOIN   v$sql    q ON q.hash_value = s.sql_hash_value
+                            AND q.address   = s.sql_address
+          WHERE  s.sid     = :p_sid
+          AND    s.serial# = :p_serial
+          AND    ROWNUM    = 1";
+
+      // Schritt 2: Bind-Variablen über V$SQL_BIND_CAPTURE laden (ORA-00904-Fix)
+      const string bindVarsSql = @"
+          SELECT b.name       AS bind_name,
+                 b.value_string AS bind_wert,
+                 b.datatype_string AS bind_typ
+          FROM   v$session         s
+          JOIN   v$sql_bind_capture b ON b.sql_id = s.sql_id
+          WHERE  s.sid     = :p_sid
+          AND    s.serial# = :p_serial
+          ORDER BY b.position ASC";
+
+      try
+      {
+        string ergebnisSql = string.Empty;
+        string ergebnisSqlId = string.Empty;
+        string ergebnisBindVars = string.Empty;
+
+        // SQL-Text abrufen
+        using (var befehl = new OracleCommand(sqlText, OraProvider.OraController.OracleConnection))
+        {
+          befehl.BindByName = true;
+          befehl.Parameters.Add("p_sid", OracleDbType.Decimal).Value = sid;
+          befehl.Parameters.Add("p_serial", OracleDbType.Decimal).Value = serial;
+
+          using (var leser = befehl.ExecuteReader())
+          {
+            if (leser.Read())
+            {
+              if (leser["SQL_TEXT"] != DBNull.Value)
+              {
+                string rawSql = leser["SQL_TEXT"].ToString();
+
+                // Логгируем сырой текст для анализа (поможет понять, откуда приходят лишние LineBreaks)
+                Logger.LogDebug("DEBUG_SQL_RAW: SID={0} | TEXT={1}", sid, rawSql);
+
+                // Заменяем множественные пробелы и переносы на один пробел перед форматированием
+                string cleanSql = System.Text.RegularExpressions.Regex.Replace(rawSql, @"\s+", " ");
+
+                ergebnisSql = FormatSql(cleanSql);
+              }
+              else
+              {
+                ergebnisSql = string.Empty;
+              }
+
+              ergebnisSqlId = leser["SQL_ID"] != DBNull.Value ? leser["SQL_ID"].ToString() : string.Empty;
+            }
+          }
+        }
+
+        if (string.IsNullOrEmpty(ergebnisSql))
+          return new Tuple<string, string>("Hinweis: Kein aktives SQL für diese Sitzung gefunden.", string.Empty);
+
+        // Bind-Variablen abrufen (nur wenn SQL-ID vorhanden)
+        if (!string.IsNullOrEmpty(ergebnisSqlId))
+        {
+          using (var befehl = new OracleCommand(bindVarsSql, OraProvider.OraController.OracleConnection))
+          {
+            befehl.BindByName = true;
+            befehl.Parameters.Add("p_sid", OracleDbType.Decimal).Value = sid;
+            befehl.Parameters.Add("p_serial", OracleDbType.Decimal).Value = serial;
+
+            using (var leser = befehl.ExecuteReader())
+            {
+              var sb = new StringBuilder();
+              while (leser.Read())
+              {
+                string name = leser["BIND_NAME"]?.ToString() ?? "–";
+                string wert = leser["BIND_WERT"] != DBNull.Value ? leser["BIND_WERT"].ToString() : "NULL";
+                string typ = leser["BIND_TYP"]?.ToString() ?? string.Empty;
+                sb.AppendLine(string.Format("{0} = {1}  [{2}]", name, wert, typ));
+              }
+              ergebnisBindVars = sb.ToString().Trim();
+            }
+          }
+        }
+
+        Logger.LogDebug("GetCurrentSqlText: SQL und Bind-Variablen für SID={Sid} geladen.", sid);
+        return new Tuple<string, string>(ergebnisSql, ergebnisBindVars);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetCurrentSqlText für SID={Sid}.", sid);
+        return new Tuple<string, string>(
+          string.Format("Datenbankfehler: {0}", ausnahme.Message),
+          string.Empty);
+      }
+    }
+
+    /// <summary>
+    /// Beendet eine spezifische Datenbanksitzung sofort (IMMEDIATE).
+    ///
+    /// Technischer Hinweis:
+    ///   ALTER SYSTEM unterstützt keine Bind-Parameter. SID und Serial werden
+    ///   als typsichere decimal-Werte direkt eingebettet – kein freier String-Input,
+    ///   daher kein SQL-Injection-Risiko.
+    ///
+    /// Voraussetzung: Das Oracle-Systemrecht ALTER SYSTEM muss dem Benutzer
+    ///   durch den DBA explizit erteilt werden:
+    ///   GRANT ALTER SYSTEM TO &lt;Benutzername&gt;;
+    /// </summary>
+    /// <param name="sid">Die Session-ID.</param>
+    /// <param name="serial">Die Seriennummer der Sitzung.</param>
+    /// <exception cref="Exception">Wird weitergereicht, damit der Aufrufer (ViewModel) reagieren kann.</exception>
+    public void KillSession(decimal sid, decimal serial)
+    {
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("KillSession: Datenbankverbindung ist nicht initialisiert.");
+        return;
+      }
+
+      // Используем вызов процедуры, предоставленной коллегами
+      string sql = "begin system.p_kill_session(:1, :2); end;";
+
+      try
+      {
+        using (var cmd = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        {
+          if (OraProvider.OraController.OracleConnection.State != ConnectionState.Open)
+          {
+            OraProvider.OraController.OracleConnection.Open();
+          }
+
+          cmd.Parameters.Add("1", OracleDbType.Decimal).Value = sid;
+          cmd.Parameters.Add("2", OracleDbType.Decimal).Value = serial;
+
+          cmd.ExecuteNonQuery();
+          Logger.LogInformation("KillSession: SID={Sid}, Serial={Serial} erfolgreich über Prozedur beendet.", sid, serial);
+        }
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "KillSession: Fehler beim Beenden von SID={Sid}, Serial={Serial}.", sid, serial);
+        // Пробрасываем исключение дальше, чтобы UI мог показать MessageBox с сообщением об ошибке от Oracle
+        throw;
+      }
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – V$SQL
+
+    /// <summary>
+    /// Ruft die Top 100 SQL-Statements aus dem Shared Pool ab,
+    /// sortiert nach Puffer-Lesezugriffen (BUFFER_GETS) absteigend.
+    /// </summary>
+    /// <returns>Liste der ressourcenintensivsten SQL-Statements.</returns>
+    public List<V_SQL> GetAllSqlList()
+    {
+      var liste = new List<V_SQL>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetAllSqlList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT sql_id, sql_fulltext, executions,
+                 disk_reads, buffer_gets, cpu_time
+          FROM (
+              SELECT sql_id, sql_fulltext, executions,
+                     disk_reads, buffer_gets, cpu_time
+              FROM   v$sql
+              ORDER BY buffer_gets DESC
+          )
+          WHERE ROWNUM <= 100";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            // Roh-Text auslesen
+            string rohSql = leser["SQL_FULLTEXT"]?.ToString() ?? string.Empty;
+
+            liste.Add(new V_SQL
+            {
+              SQL_ID = leser["SQL_ID"]?.ToString(),
+
+              // die Formatierung 
+              SQL_FULLTEXT = FormatSql(rohSql),
+
+              EXECUTIONS = leser["EXECUTIONS"] != DBNull.Value ? Convert.ToDecimal(leser["EXECUTIONS"]) : 0,
+              DISK_READS = leser["DISK_READS"] != DBNull.Value ? Convert.ToDecimal(leser["DISK_READS"]) : 0,
+              BUFFER_GETS = leser["BUFFER_GETS"] != DBNull.Value ? Convert.ToDecimal(leser["BUFFER_GETS"]) : 0,
+              CPU_TIME = leser["CPU_TIME"] != DBNull.Value ? Convert.ToDecimal(leser["CPU_TIME"]) : 0
+            });
+          }
+        }
+
+        Logger.LogDebug("GetAllSqlList: {Anzahl} SQL-Einträge geladen.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetAllSqlList.");
+      }
+
+      return liste;
+    }
+
+    /// <summary>
+    /// Analyse-Modus: Top 20 SQL-Statements nach Ausführungsanzahl (EXECUTIONS) absteigend.
+    /// SQL_FULLTEXT wird vollständig ausgegeben für die Detail-Ansicht.
+    /// </summary>
+    /// <returns>Liste der 20 am häufigsten ausgeführten SQL-Statements inkl. Volltext.</returns>
+    public List<V_SQL> GetTopExecutedSqlList()
+    {
+      var liste = new List<V_SQL>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetTopExecutedSqlList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT sql_id, sql_fulltext, executions,
+                 disk_reads, buffer_gets, cpu_time
+          FROM (
+              SELECT sql_id, sql_fulltext, executions,
+                     disk_reads, buffer_gets, cpu_time
+              FROM   v$sql
+              ORDER BY executions DESC
+          )
+          WHERE ROWNUM <= 20";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            // Roh-Text auslesen
+            string rohSql = leser["SQL_FULLTEXT"]?.ToString() ?? string.Empty;
+
+            liste.Add(new V_SQL
+            {
+              SQL_ID = leser["SQL_ID"]?.ToString(),
+
+              // die Formatierung
+              SQL_FULLTEXT = FormatSql(rohSql),
+
+              EXECUTIONS = leser["EXECUTIONS"] != DBNull.Value ? Convert.ToDecimal(leser["EXECUTIONS"]) : 0,
+              DISK_READS = leser["DISK_READS"] != DBNull.Value ? Convert.ToDecimal(leser["DISK_READS"]) : 0,
+              BUFFER_GETS = leser["BUFFER_GETS"] != DBNull.Value ? Convert.ToDecimal(leser["BUFFER_GETS"]) : 0,
+              CPU_TIME = leser["CPU_TIME"] != DBNull.Value ? Convert.ToDecimal(leser["CPU_TIME"]) : 0
+            });
+          }
+        }
+
+        Logger.LogDebug("GetTopExecutedSqlList: {Anzahl} Einträge geladen.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetTopExecutedSqlList.");
+      }
+
+      return liste;
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – V$PROCESS
+
+    /// <summary>
+    /// Ruft alle Oracle-Serverprozesse ab, sortiert nach PGA-Speicherauslastung absteigend.
+    /// ADDR wird via RAWTOHEX als lesbarer HEX-String ausgegeben (verhindert System.Byte[]-Anzeige).
+    /// </summary>
+    /// <returns>Liste aller aktiven Oracle-Serverprozesse.</returns>
+    public List<V_PROCESS> GetAllProcessesList()
+    {
+      var liste = new List<V_PROCESS>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetAllProcessesList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT pid, spid, username, program,
+                 RAWTOHEX(addr) AS addr,
+                 background,
+                 pga_used_mem,
+                 pga_alloc_mem
+          FROM   v$process
+          ORDER BY pga_used_mem DESC";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            liste.Add(new V_PROCESS
+            {
+              PID = leser["PID"] != DBNull.Value ? Convert.ToDecimal(leser["PID"]) : (decimal?)null,
+              SPID = leser["SPID"] != DBNull.Value ? Convert.ToDecimal(leser["SPID"]) : (decimal?)null,
+              USERNAME = leser["USERNAME"]?.ToString(),
+              PROGRAM = leser["PROGRAM"]?.ToString(),
+              ADDR = leser["ADDR"]?.ToString(),
+              BACKGROUND = leser["BACKGROUND"]?.ToString(),
+              PGA_USED_MEM = leser["PGA_USED_MEM"] != DBNull.Value ? Convert.ToDecimal(leser["PGA_USED_MEM"]) : 0,
+              PGA_ALLOC_MEM = leser["PGA_ALLOC_MEM"] != DBNull.Value ? Convert.ToDecimal(leser["PGA_ALLOC_MEM"]) : 0
+            });
+          }
+        }
+
+        Logger.LogDebug("GetAllProcessesList: {Anzahl} Prozesse geladen.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetAllProcessesList.");
+      }
+
+      return liste;
+    }
+
+    /// <summary>
+    /// Analyse-Modus: Top 20 Oracle-Prozesse nach PGA-Speicherauslastung.
+    /// Nützlich für schnelle Speicheranalyse über den Dashboard-Button.
+    /// </summary>
+    /// <returns>Liste der 20 speicherintensivsten Oracle-Prozesse.</returns>
+    public List<V_PROCESS> GetTopMemoryProcessesList()
+    {
+      var liste = new List<V_PROCESS>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetTopMemoryProcessesList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT pid, spid, username, program,
+                 addr, background,
+                 pga_used_mem, pga_alloc_mem
+          FROM (
+              SELECT pid, spid, username, program,
+                     RAWTOHEX(addr) AS addr,
+                     background,
+                     pga_used_mem,
+                     pga_alloc_mem
+              FROM   v$process
+              ORDER BY pga_used_mem DESC
+          )
+          WHERE ROWNUM <= 20";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            liste.Add(new V_PROCESS
+            {
+              PID = leser["PID"] != DBNull.Value ? Convert.ToDecimal(leser["PID"]) : (decimal?)null,
+              SPID = leser["SPID"] != DBNull.Value ? Convert.ToDecimal(leser["SPID"]) : (decimal?)null,
+              USERNAME = leser["USERNAME"]?.ToString(),
+              PROGRAM = leser["PROGRAM"]?.ToString(),
+              ADDR = leser["ADDR"]?.ToString(),
+              BACKGROUND = leser["BACKGROUND"]?.ToString(),
+              PGA_USED_MEM = leser["PGA_USED_MEM"] != DBNull.Value ? Convert.ToDecimal(leser["PGA_USED_MEM"]) : 0,
+              PGA_ALLOC_MEM = leser["PGA_ALLOC_MEM"] != DBNull.Value ? Convert.ToDecimal(leser["PGA_ALLOC_MEM"]) : 0
+            });
+          }
+        }
+
+        Logger.LogDebug("GetTopMemoryProcessesList: {Anzahl} Prozesse geladen.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetTopMemoryProcessesList.");
+      }
+
+      return liste;
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – V$LOCK
+
+    /// <summary>
+    /// Ruft alle aktiven Transaktionssperren (TX-Locks) aus V$LOCK ab.
+    /// DECODE wandelt numerische lmode/request-Codes in lesbare Bezeichnungen um.
+    /// Sortiert nach SID für konsistente Darstellung.
+    /// </summary>
+    /// <returns>Liste aktiver TX-Sperren mit vollständigen Sitzungs- und Lock-Informationen.</returns>
+    public List<V_LOCK> GetLockList()
+    {
+      var liste = new List<V_LOCK>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetLockList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+    SELECT DISTINCT
+           s.sid,
+           s.serial# AS serial,
+           s.username,
+           s.osuser,
+           s.machine,
+           s.terminal,
+           s.program,
+           s.status,
+           s.logon_time,
+           s.type AS session_type,
+           l.id1,
+           l.type,
+           DECODE(l.lmode, 0, 'Waiting', 1, 'Null', 2, 'Row Shr', 3, 'Row Exc', 4, 'Share', 5, 'Shr Row X', 6, 'Exclusive', TO_CHAR(l.lmode)) AS status_aktuell,
+           DECODE(l.request, 0, 'None', 1, 'Null', 2, 'Row Shr', 3, 'Row Exc', 4, 'Share', 5, 'Shr Row X', 6, 'Exclusive', TO_CHAR(l.request)) AS angefragt
+    FROM v$session s
+    JOIN v$lock l ON s.sid = l.sid
+    WHERE l.type = 'TX'
+    ORDER BY s.sid";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            liste.Add(new V_LOCK
+            {
+              SID = leser["SID"] != DBNull.Value ? Convert.ToDecimal(leser["SID"]) : 0,
+              SERIAL = leser["SERIAL"] != DBNull.Value ? Convert.ToDecimal(leser["SERIAL"]) : 0,
+              USERNAME = leser["USERNAME"]?.ToString(),
+              OSUSER = leser["OSUSER"]?.ToString(),
+              MACHINE = leser["MACHINE"]?.ToString(),
+              PROGRAM = leser["PROGRAM"]?.ToString(),
+              ID1 = leser["ID1"]?.ToString(),
+              TYPE = leser["TYPE"]?.ToString(),
+              STATUS_AKTUELL = leser["STATUS_AKTUELL"]?.ToString(),
+              ANGEFRAGT = leser["ANGEFRAGT"]?.ToString(),
+              LOGON_TIME = leser["LOGON_TIME"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["LOGON_TIME"]) : null,
+              STATUS = leser["STATUS"]?.ToString(),
+              TERMINAL = leser["TERMINAL"]?.ToString(),
+              SESSION_TYPE = leser["SESSION_TYPE"]?.ToString()
+            });
+          }
+        }
+
+        Logger.LogDebug("GetLockList: {Anzahl} Sperren gefunden.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetLockList.");
+      }
+
+      return liste;
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden – DBA_SCHEDULER_JOBS
+
+    /// <summary>
+    /// Ruft alle aktiven Scheduler-Jobs des Benutzers SYSADM ab.
+    /// Filter: owner = 'SYSADM' AND state != 'DISABLED'.
+    /// Erweiterte Spalten: job_action, start_date, repeat_interval,
+    ///   failure_count, last_start_date.
+    /// Sortiert nach nächstem Ausführungszeitpunkt aufsteigend.
+    /// </summary>
+    /// <returns>Liste aller aktiven SYSADM Scheduler-Jobs.</returns>
+    public List<V_JOB> GetJobList()
+    {
+      var liste = new List<V_JOB>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetJobList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT job_name, job_type, job_action,
+                 start_date, repeat_interval,
+                 enabled, state,
+                 run_count, failure_count,
+                 last_start_date, last_run_duration,
+                 next_run_date, comments
+          FROM   dba_scheduler_jobs
+          WHERE  owner = 'SYSADM'
+          AND    state != 'DISABLED'
+          ORDER BY next_run_date ASC";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            liste.Add(new V_JOB
+            {
+              JOB_NAME = leser["JOB_NAME"]?.ToString(),
+              JOB_TYPE = leser["JOB_TYPE"]?.ToString(),
+              JOB_ACTION = leser["JOB_ACTION"]?.ToString(),
+              START_DATE = leser["START_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["START_DATE"]) : null,
+              REPEAT_INTERVAL = leser["REPEAT_INTERVAL"]?.ToString(),
+              ENABLED = leser["ENABLED"]?.ToString(),
+              STATE = leser["STATE"]?.ToString(),
+              RUN_COUNT = leser["RUN_COUNT"] != DBNull.Value ? Convert.ToDecimal(leser["RUN_COUNT"]) : 0,
+              FAILURE_COUNT = leser["FAILURE_COUNT"] != DBNull.Value ? Convert.ToDecimal(leser["FAILURE_COUNT"]) : 0,
+              LAST_START_DATE = leser["LAST_START_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["LAST_START_DATE"]) : null,
+              LAST_RUN_DURATION = leser["LAST_RUN_DURATION"]?.ToString(),
+              NEXT_RUN_DATE = leser["NEXT_RUN_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["NEXT_RUN_DATE"]) : null,
+              COMMENTS = leser["COMMENTS"]?.ToString()
+            });
+          }
+        }
+
+        Logger.LogDebug("GetJobList: {Anzahl} Jobs geladen.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetJobList.");
+      }
+
+      return liste;
+    }
+
+    /// <summary>
+    /// Dashboard-Abfrage: Nur Jobs mit kritischem Status.
+    /// Filter: owner = 'SYSADM' AND state IN ('BROKEN', 'FAILED', 'STOPPED').
+    /// Wird auf der orangefarbenen Dashboard-Karte als Warnanzeige dargestellt.
+    /// </summary>
+    /// <returns>Liste aller Jobs mit kritischem Ausführungsstatus.</returns>
+    public List<V_JOB> GetAuffaelligeJobList()
+    {
+      var liste = new List<V_JOB>();
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetAuffaelligeJobList: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT job_name, job_type, state,
+                 run_count, failure_count,
+                 last_start_date, last_run_duration, comments
+          FROM   dba_scheduler_jobs
+          WHERE  owner = 'SYSADM'
+          AND    state IN ('BROKEN', 'FAILED', 'STOPPED')
+          ORDER BY state ASC, job_name ASC";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        using (var leser = befehl.ExecuteReader())
+        {
+          while (leser.Read())
+          {
+            liste.Add(new V_JOB
+            {
+              JOB_NAME = leser["JOB_NAME"]?.ToString(),
+              JOB_TYPE = leser["JOB_TYPE"]?.ToString(),
+              STATE = leser["STATE"]?.ToString(),
+              RUN_COUNT = leser["RUN_COUNT"] != DBNull.Value ? Convert.ToDecimal(leser["RUN_COUNT"]) : 0,
+              FAILURE_COUNT = leser["FAILURE_COUNT"] != DBNull.Value ? Convert.ToDecimal(leser["FAILURE_COUNT"]) : 0,
+              LAST_START_DATE = leser["LAST_START_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["LAST_START_DATE"]) : null,
+              LAST_RUN_DURATION = leser["LAST_RUN_DURATION"]?.ToString(),
+              COMMENTS = leser["COMMENTS"]?.ToString()
+            });
+          }
+        }
+
+        Logger.LogDebug("GetAuffaelligeJobList: {Anzahl} auffällige Jobs gefunden.", liste.Count);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetAuffaelligeJobList.");
+      }
+
+      return liste;
+    }
+
+    /// <summary>
+    /// Ruft das Ausführungsprotokoll zu einem bestimmten Scheduler-Job ab.
+    /// Sortiert nach log_id absteigend (neueste Einträge zuerst).
+    /// </summary>
+    /// <param name="jobName">Der exakte Name des Oracle Scheduler Jobs.</param>
+    /// <returns>Liste der letzten Ausführungsdetails des angegebenen Jobs.</returns>
+    public List<V_JOB_RUN_DETAILS> GetJobLog(string jobName)
+    {
+      var liste = new List<V_JOB_RUN_DETAILS>();
+
+      if (string.IsNullOrWhiteSpace(jobName))
+      {
+        Logger.LogWarning("GetJobLog: Kein Job-Name übergeben.");
+        return liste;
+      }
+
+      if (OraProvider?.OraController?.OracleConnection == null)
+      {
+        Logger.LogWarning("GetJobLog: Datenbankverbindung ist nicht initialisiert.");
+        return liste;
+      }
+
+      const string sql = @"
+          SELECT log_date, job_name, status,
+                 req_start_date, run_duration
+          FROM   dba_scheduler_job_run_details
+          WHERE  job_name = :p_jobName
+          ORDER BY log_id DESC";
+
+      try
+      {
+        using (var befehl = new OracleCommand(sql, OraProvider.OraController.OracleConnection))
+        {
+          befehl.Parameters.Add(new OracleParameter("p_jobName", jobName));
+
+          using (var leser = befehl.ExecuteReader())
+          {
+            while (leser.Read())
+            {
+              liste.Add(new V_JOB_RUN_DETAILS
+              {
+                LOG_DATE = leser["LOG_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["LOG_DATE"]) : null,
+                JOB_NAME = leser["JOB_NAME"]?.ToString(),
+                STATUS = leser["STATUS"]?.ToString(),
+                REQ_START_DATE = leser["REQ_START_DATE"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(leser["REQ_START_DATE"]) : null,
+                RUN_DURATION = leser["RUN_DURATION"] != DBNull.Value ? leser["RUN_DURATION"].ToString() : "00:00:00"
+              });
+            }
+          }
+        }
+
+        Logger.LogDebug("GetJobLog: {Anzahl} Protokolleinträge für '{JobName}' geladen.", liste.Count, jobName);
+      }
+      catch (Exception ausnahme)
+      {
+        Logger.LogError(ausnahme, "Fehler in GetJobLog für Job '{JobName}'.", jobName);
+      }
+
+      return liste;
+    }
+
+    #endregion
+
+    #region Private Hilfsmethoden
+
+    /// <summary>
+    /// Formatiert einen SQL-Rohtext für die lesbare Darstellung im Detail-Panel.
+    /// Fügt vor den wichtigsten SQL-Schlüsselwörtern einen Zeilenumbruch ein.
+    /// Kompatibel mit C# 7.3 (kein String.Replace mit StringComparison-Overload).
+    /// </summary>
+    /// <param name="rohSql">Der zu formatierende SQL-Rohtext.</param>
+    /// <returns>Formatierter, zeilenumgebrochener SQL-Text.</returns>
+    private static string FormatSql(string rohSql)
+    {
+      if (string.IsNullOrWhiteSpace(rohSql)) return string.Empty;
+
+      try
+      {
+        var formatter = new PoorMansTSqlFormatterLib.SqlFormattingManager();
+        return formatter.Format(rohSql);
+      }
+      catch (Exception)
+      {
+        return rohSql;
+      }
+    }
+
+    #endregion
+  }
+}

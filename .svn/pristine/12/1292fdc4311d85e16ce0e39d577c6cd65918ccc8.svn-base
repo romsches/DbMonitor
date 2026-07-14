@@ -1,0 +1,51 @@
+﻿using System.Windows;
+using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+using ICSharpCode.AvalonEdit.Highlighting;
+using static SQL.Formatter.SqlFormatter; // Убедись, что этот using работает
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  public partial class SperrenView : UserControl
+  {
+    public SperrenView()
+    {
+      InitializeComponent();
+
+      // 1. Авто-обновление при загрузке
+      this.Loaded += (s, e) => {
+        if (DataContext is SperrenViewModel vm)
+          vm.SperrenAktualisierenBefehl.Execute(null);
+      };
+
+      // 2. Слушаем изменения DataContext, чтобы подписаться на свойства ViewModel
+      this.DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+      if (DataContext is SperrenViewModel vm)
+      {
+        vm.PropertyChanged += (s, args) =>
+        {
+          if (args.PropertyName == nameof(SperrenViewModel.AusgewaehlteSperreSql))
+            UpdateSqlEditor(SqlEditorSperren, vm.AusgewaehlteSperreSql);
+        };
+      }
+    }
+
+    private void UpdateSqlEditor(ICSharpCode.AvalonEdit.TextEditor editor, string sqlText)
+    {
+      if (editor == null) return;
+      editor.Text = FormatiereSql(sqlText);
+
+      if (editor.SyntaxHighlighting == null)
+      {
+        editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("SQL")
+                                 ?? HighlightingManager.Instance.GetDefinition("TSQL");
+      }
+    }
+
+    private string FormatiereSql(string sql) => string.IsNullOrWhiteSpace(sql) ? string.Empty : Format(sql);
+  }
+}

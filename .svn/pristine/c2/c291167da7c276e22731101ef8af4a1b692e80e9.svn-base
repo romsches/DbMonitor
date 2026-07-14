@@ -1,0 +1,6 @@
+﻿namespace Bsd.DbMonitorData
+{
+  public class SessionInfo
+  {
+  }
+}

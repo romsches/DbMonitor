@@ -1,0 +1,86 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <configSections>
+    <section name="log4net" type="log4net.Config.Log4NetConfigurationSectionHandler, log4net" />
+  </configSections>
+  <log4net>
+    <appender name="FileAppender" type="log4net.Appender.RollingFileAppender">
+      <file value="log/BSD_DbMonitor.txt" />
+      <appendToFile value="true" />
+      <preserveLogFileNameExtension value="true" />
+      <rollingStyle value="Size" />
+      <maximumFileSize value="100MB" />
+      <maxSizeRollBackups value="5" />
+      <staticLogFileName value="true" />
+      <lockingModel type="log4net.Appender.FileAppender+MinimalLock" />
+      <layout type="log4net.Layout.PatternLayout">
+        <!-- Old Pattern:
+        <conversionPattern value="%date [pid=%property{pid}] [%thread] %-5level %method - %message%newline" />
+        -->
+        <conversionPattern value="%date{dd.MM.yyyy HH:mm:ss,fff} %-5level [%-3thread] (%logger{1}) %type{1}:%method@%line - %message%newline%exception" />
+      </layout>
+    </appender>
+    <root>
+      <level value="All" />
+      <appender-ref ref="FileAppender" />
+    </root>
+  </log4net>
+  <connectionStrings>
+    <add name="ctspConnectionString" connectionString="DATA SOURCE=CTSP_SYSMON;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="ctssConnectionString" connectionString="DATA SOURCE=CTSS_SYSDRK;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="bwdemoConnectionString" connectionString="DATA SOURCE=BWDEMO_SYSDRK;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="noTestConnectionString" connectionString="DATA SOURCE=NOTEST_SYSDRK;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="noValidConnectionString" connectionString="DATA SOURCE=NOVALID_SYSDRK;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="noProdConnectionString" connectionString="DATA SOURCE=NOPROD_SYSDRK;User Id=/;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="ztbTestConnectionString" connectionString="DATA SOURCE=ZTBTEST;User Id=sysadm;Password=sysadm;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="nordOstConnectionString" connectionString="DATA SOURCE=NORDOST;User Id=sysadm;Password=sysadm;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="rmdbConnectionString" connectionString="DATA SOURCE=rmdb;User Id=bcs;Password=bcs;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+    <add name="ztbprodConnectionString" connectionString="DATA SOURCE=ZTBPROD;User Id=sysadm;Password=sysadm;Connection Lifetime=120;Connection Timeout=60;Min Pool Size=1;Max Pool Size=15;Incr Pool Size=3; Decr Pool Size=1" providerName="Oracle.DataAccess.Client" />
+  </connectionStrings>
+  <appSettings>
+    <add key="ConnectionString" value="ctssConnectionString" />
+    <add key="WindowTitle" value="DbMonitor" />
+    <add key="ClientSettingsProvider.ServiceUri" value="" />
+  </appSettings>
+  <runtime>
+    <legacyUnhandledExceptionPolicy enabled="1" />
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Text.Json" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.1" newVersion="8.0.0.1" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Runtime.CompilerServices.Unsafe" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-6.0.0.0" newVersion="6.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Bcl.AsyncInterfaces" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.0.0.0" newVersion="7.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Memory" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.0.1.2" newVersion="4.0.1.2" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Formats.Asn1" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.0" newVersion="8.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Options" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.1" newVersion="8.0.0.1" />
+      </dependentAssembly>
+    </assemblyBinding>
+  </runtime>
+  <system.web>
+    <membership defaultProvider="ClientAuthenticationMembershipProvider">
+      <providers>
+        <add name="ClientAuthenticationMembershipProvider" type="System.Web.ClientServices.Providers.ClientFormsAuthenticationMembershipProvider, System.Web.Extensions, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35" serviceUri="" />
+      </providers>
+    </membership>
+    <roleManager defaultProvider="ClientRoleProvider" enabled="true">
+      <providers>
+        <add name="ClientRoleProvider" type="System.Web.ClientServices.Providers.ClientRoleProvider, System.Web.Extensions, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35" serviceUri="" cacheTimeout="86400" />
+      </providers>
+    </roleManager>
+  </system.web>
+<startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup></configuration>

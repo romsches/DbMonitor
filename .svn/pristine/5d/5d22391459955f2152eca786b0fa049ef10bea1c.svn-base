@@ -1,0 +1,17 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+
+namespace Bsd.DbMonitorData
+{
+  public static class DiProvider
+  {
+    public static void InitDependencyInjectionForDbMonitorData(this ServiceCollection serviceCollection)
+    {
+      if (serviceCollection == null)
+      {
+        return;
+      }
+
+      serviceCollection.AddTransient<DbQuery>();
+    }
+  }
+}

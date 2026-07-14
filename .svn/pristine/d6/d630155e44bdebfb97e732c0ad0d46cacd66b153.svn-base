@@ -1,0 +1,22 @@
+﻿using System;
+
+namespace Bsd.DbMonitorWPF.Helpers
+{
+  /// <summary>
+  /// Stellt Hilfsmethoden zur Formatierung von Statusanzeigen in der Benutzeroberfläche bereit.
+  /// </summary>
+  public static class StatusHelper
+  {
+    /// <summary>
+    /// Erstellt eine standardisierte Status-Zeichenfolge für die Anzeige in der UI.
+    /// </summary>
+    /// <param name="count">Die Anzahl der gefundenen Elemente.</param>
+    /// <param name="entityName">Der Name der Entität (z. B. "Sitzungen").</param>
+    /// <returns>Ein formatierter String mit Elementanzahl und aktuellem Zeitstempel.</returns>
+    public static string FormatStatus(int count, string entityName)
+    {
+      // Verwendung von String-Interpolation für bessere Lesbarkeit und Performance
+      return $"Gefunden: {count} {entityName} | Stand: {DateTime.Now:HH:mm:ss}";
+    }
+  }
+}

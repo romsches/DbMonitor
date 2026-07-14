@@ -1,0 +1,130 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.DbMonitorWPF.Views;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using DbMonitorWPF.Views;
+using log4net;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class ProzesseViewModel : DiViewModel
+  {
+    private V_PROCESS _ausgewaehlterProzess;
+    private string _filterTextProzesse;
+    private string _statusProzesse;
+    private readonly ILogger _log;
+    private bool _isInitialized = false;
+    public string StatusProzesse
+    {
+      get => _statusProzesse;
+      set => SetVal(ref _statusProzesse, value);
+    }
+
+    public ObservableCollection<V_PROCESS> Prozesse { get; }
+    public ICollectionView ProzesseAnsicht { get; }
+
+    public ProzesseViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<SqlhistorieViewModel> log)
+        : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      Prozesse = new ObservableCollection<V_PROCESS>();
+      ProzesseAnsicht = CollectionViewSource.GetDefaultView(Prozesse);
+      ProzesseAnsicht.Filter = FilterProzesseDelegate;
+      ProzesseAktualisierenBefehl = new DelegateCommand(ProzesseAktualisierenAusfuehren);
+    }
+
+    public V_PROCESS AusgewaehlterProzess
+    {
+      get => _ausgewaehlterProzess;
+      set => SetObj(ref _ausgewaehlterProzess, value);
+    }
+
+    public string FilterTextProzesse
+    {
+      get => _filterTextProzesse;
+      set { SetVal(ref _filterTextProzesse, value); ProzesseAnsicht.Refresh(); }
+    }
+
+    public ICommand ProzesseAktualisierenBefehl { get; }
+
+    private void ProzesseAktualisierenAusfuehren()
+    {
+      StatusProzesse = "Wird geladen...";
+
+      System.Threading.Tasks.Task.Run(() =>
+      {
+        // Если ServiceProvider недоступен напрямую, используй свойство из базового класса (как в Sqlhistorie)
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        var data = dbQuery?.GetAllProcessesList() ?? new List<V_PROCESS>();
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(Prozesse, data);
+          ProzesseAnsicht.Refresh();
+          StatusProzesse = $"Geladen: {data.Count} Prozesse | {DateTime.Now:HH:mm:ss}";
+        });
+      });
+    }
+
+    private bool FilterProzesseDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(FilterTextProzesse)) return true;
+      if (obj is V_PROCESS p)
+      {
+        string f = FilterTextProzesse.Trim();
+        // Используй метод Enthaelt, если он есть в DiViewModel
+        return Enthaelt(p.USERNAME, f) ||
+               Enthaelt(p.PROGRAM, f) ||
+               Enthaelt(p.BACKGROUND, f) ||
+               Enthaelt(p.SPID?.ToString(), f) ||
+               Enthaelt(p.ADDR, f);
+      }
+      return false;
+    }
+    public void LadeTopProzesseAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { /* Log-Zugriff anpassen */ return; }
+
+      FilterTextProzesse = string.Empty;
+
+      try
+      {
+        var liste = dbQuery.GetTopMemoryProcessesList();
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(Prozesse, liste);
+          ProzesseAnsicht?.Refresh();
+          StatusProzesse = $"Top {liste.Count} Prozesse (nach Speicher)  |  Stand: {DateTime.Now:HH:mm:ss}";
+        });
+      }
+      catch (Exception ausnahme)
+      {
+        // Nutze den Logger deines ViewModels
+        _log.LogError(ausnahme, "LadeTopProzesse: Fehler beim Laden.");
+        BsdApplication.InvokeIfRequired(() => StatusProzesse = "Fehler beim Laden der Prozessdaten.");
+      }
+    }
+
+    // Если метод Enthaelt не определен в базовом классе, раскомментируй этот:
+    /*
+    private bool Enthaelt(string text, string suchbegriff)
+    {
+        return text != null && text.IndexOf(suchbegriff, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+    */
+  }
+}

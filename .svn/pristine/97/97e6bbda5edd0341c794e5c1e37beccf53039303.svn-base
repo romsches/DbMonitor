@@ -1,0 +1,59 @@
+﻿using System;
+using PoorMansTSqlFormatterLib;
+
+namespace Bsd.DbMonitorWPF.Helpers
+{
+  /// <summary>
+  /// Bietet Funktionalitäten zur professionellen Formatierung von SQL-Strings.
+  /// </summary>
+  public static class SqlFormatterHelper
+  {
+    #region Konstanten
+
+    private const string WarningMarker = "--WARNING!";
+
+    #endregion
+
+    /// <summary>
+    /// Formatiert einen rohen SQL-String und bereinigt ihn von Warnmeldungen.
+    /// </summary>
+    /// <param name="rawSql">Der zu formatierende SQL-Text.</param>
+    /// <returns>Ein formatierter und bereinigter SQL-String.</returns>
+    public static string Format(string rawSql)
+    {
+      if (string.IsNullOrWhiteSpace(rawSql))
+      {
+        return string.Empty;
+      }
+
+      string sqlToFormat = CleanSqlContent(rawSql);
+
+      var formatter = new SqlFormattingManager();
+      return formatter.Format(sqlToFormat).Trim();
+    }
+
+    /// <summary>
+    /// Bereinigt den SQL-Input von spezifischen Warnhinweisen, falls vorhanden.
+    /// </summary>
+    private static string CleanSqlContent(string sql)
+    {
+      int warningIndex = sql.IndexOf(WarningMarker, StringComparison.OrdinalIgnoreCase);
+
+      if (warningIndex < 0)
+      {
+        return sql;
+      }
+
+      // Suche nach dem nächsten SELECT nach der Warnung
+      int selectIndex = sql.IndexOf("SELECT", warningIndex, StringComparison.OrdinalIgnoreCase);
+
+      if (selectIndex > 0)
+      {
+        return sql.Substring(selectIndex);
+      }
+
+      // Fallback: Schneide den Warnungsteil ab
+      return sql.Substring(warningIndex + WarningMarker.Length);
+    }
+  }
+}

@@ -1,0 +1,73 @@
+﻿<UserControl x:Class="Bsd.DbMonitorWPF.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="600" d:DesignWidth="1000">
+
+  <Grid Margin="15">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <UniformGrid Grid.Row="0" Rows="1" Height="90" Margin="0,0,0,15">
+      <Button Command="{Binding WechsleZuSitzungenBefehl}" Cursor="Hand" Margin="0,0,8,0">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <ContentPresenter/>
+          </ControlTemplate>
+        </Button.Template>
+        <Border Style="{StaticResource InfoCardStyle}" Background="#E8F5E9">
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="Aktuelle Sitzungen" HorizontalAlignment="Center" Foreground="#2E7D32" FontWeight="SemiBold"/>
+            <TextBlock Text="{Binding AnzahlSitzungen, Mode=OneWay}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#2E7D32"/>
+          </StackPanel>
+        </Border>
+      </Button>
+
+      <Button Command="{Binding WechsleZuJobsBefehl}" Cursor="Hand" Margin="4,0">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <ContentPresenter/>
+          </ControlTemplate>
+        </Button.Template>
+        <Border Style="{StaticResource InfoCardStyle}" Background="#FFF3E0">
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="Auffällige Jobs" HorizontalAlignment="Center" Foreground="#E65100" FontWeight="SemiBold"/>
+            <TextBlock Text="{Binding AnzahlAuffaelligeJobs, Mode=OneWay}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#E65100"/>
+          </StackPanel>
+        </Border>
+      </Button>
+
+      <Button Command="{Binding WechsleZuSperrenBefehl}" Cursor="Hand" Margin="8,0,0,0">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <ContentPresenter/>
+          </ControlTemplate>
+        </Button.Template>
+        <Border Style="{StaticResource InfoCardStyle}" Background="#FFEBEE">
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="Aktuelle Sperren" HorizontalAlignment="Center" Foreground="#C62828" FontWeight="SemiBold"/>
+            <TextBlock Text="{Binding AnzahlSperren, Mode=OneWay}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#C62828"/>
+          </StackPanel>
+        </Border>
+      </Button>
+    </UniformGrid>
+
+    <GroupBox Grid.Row="1" Header="Schnell-Analyse" Margin="0,0,0,10" HorizontalAlignment="Stretch">
+      <UniformGrid Rows="1" Margin="5">
+        <Button Content="Top 20 SQL (nach Ausführungen)"
+                        Command="{Binding LadeTopSqlBefehl}"
+                        Style="{StaticResource AnalysisButtonStyle}"
+                        Margin="0,0,5,0"/>
+        <Button Content="Top 20 Prozesse (nach Speicher)"
+                        Command="{Binding LadeTopProzesseBefehl}"
+                        Style="{StaticResource AnalysisButtonStyle}"
+                        Margin="5,0,0,0"/>
+      </UniformGrid>
+    </GroupBox>
+  </Grid>
+</UserControl>

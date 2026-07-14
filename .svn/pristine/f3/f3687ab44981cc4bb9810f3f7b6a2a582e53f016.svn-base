@@ -1,0 +1,52 @@
+﻿using System;
+using System.Windows.Input;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorWPF.ViewModels;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.Logging;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  /// <summary>
+  /// Das Dashboard-ViewModel zeigt aggregierte Statusinformationen an.
+  /// Es greift lesend auf andere ViewModels zu.
+  /// </summary>
+  public class DashboardViewModel : DiViewModel
+  {
+    private readonly MainViewModel _mainViewModel;
+
+    public DashboardViewModel(MainViewModel mainViewModel, IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<DashboardViewModel> log)
+        : base(serviceProvider, oraProvider, log)
+    {
+      _mainViewModel = mainViewModel ?? throw new ArgumentNullException(nameof(mainViewModel));
+    }
+
+    #region Öffentliche Eigenschaften (Daten-Aggregation)
+
+    public int AnzahlSitzungen => _mainViewModel.SitzungenVm?.Sitzungen?.Count ?? 0;
+    public int AnzahlSperren => _mainViewModel.SperrenVm?.Sperren?.Count ?? 0;
+    public int AnzahlAuffaelligeJobs => _mainViewModel.JobsVm?.AuffaelligeJobs?.Count ?? 0;
+
+    #endregion
+
+    #region Befehle (Delegation an MainViewModel)
+
+    public ICommand WechsleZuSitzungenBefehl => _mainViewModel.WechsleZuSitzungenBefehl;
+    public ICommand WechsleZuJobsBefehl => _mainViewModel.WechsleZuJobsBefehl;
+    public ICommand WechsleZuSperrenBefehl => _mainViewModel.WechsleZuSperrenBefehl;
+    public ICommand LadeTopSqlBefehl => _mainViewModel.LadeTopSqlBefehl;
+    public ICommand LadeTopProzesseBefehl => _mainViewModel.LadeTopProzesseBefehl;
+
+    #endregion
+
+    /// <summary>
+    /// Aktualisiert die Anzeige des Dashboards, indem alle Zähler neu berechnet werden.
+    /// </summary>
+    public void Refresh()
+    {
+      OnPropertyChanged(nameof(AnzahlSitzungen));
+      OnPropertyChanged(nameof(AnzahlSperren));
+      OnPropertyChanged(nameof(AnzahlAuffaelligeJobs));
+    }
+  }
+}

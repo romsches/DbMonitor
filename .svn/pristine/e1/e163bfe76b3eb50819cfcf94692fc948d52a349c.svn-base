@@ -1,0 +1,1590 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.BL.Login;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.WPFObjects;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Events;
+using Bsd.WPFObjects.Helper.Tasks;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+using Bsd.DbMonitorWPF.Views;
+using DbMonitorWPF.Views;
+using Bsd.DbMonitorWPF.Helpers;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  /// <summary>
+  /// Haupt-ViewModel des Oracle Database Monitors.
+  ///
+  /// Verantwortlichkeiten:
+  ///   – Datenabruf und Verwaltung aller UI-Collections
+  ///     (Sitzungen, SQL-Verlauf, Prozesse, Sperren, Jobs)
+  ///   – Automatische Hintergrundaktualisierung im 30-Sekunden-Zyklus
+  ///   – Pausierung der Aktualisierung bei aktiver Benutzerauswahl (T-07)
+  ///   – Filterlogik für alle Tabs vollständig im ViewModel (kein Code-Behind)
+  ///   – Session/Sperre beenden: Bestätigungsdialog, CanExecute, sofortiges Entfernen
+  ///   – Dashboard-Navigation per Command
+  ///   – SQL in Zwischenablage kopieren (T-06)
+  ///   – Kontext-sensitive Statuszeile (T-07)
+  ///   – Farbliches Highlighting von Systembenutzern via BenutzerFarbe-Lookup (T-03)
+  /// </summary>
+  public class MainViewModel : DiViewModel
+  {
+    #region Felder
+    public AuditLogViewModel AuditLogVm { get; private set; }
+    private readonly ILogger<MainViewModel> _log;
+
+    // --- Texteingaben ---
+    private string _benutzer = string.Empty;
+    private string _sqlInhalt = string.Empty;
+    private string _sidEingabe = string.Empty;
+    private string _serialEingabe = string.Empty;
+
+    // --- Filtertexte für alle Tabs (T-04) ---
+    private string _filterTextSitzungen = string.Empty;
+    private string _filterTextSql = string.Empty;
+    private string _filterTextProzesse = string.Empty;
+    private string _filterTextJobs = string.Empty;
+    private string _filterTextSperren = string.Empty;
+
+    // --- Statuszeilen ---
+    private string _statusSitzungen = string.Empty;
+    private string _statusSql = string.Empty;
+    private string _statusProzesse = string.Empty;
+    private string _statusSperren = string.Empty;
+    private string _statusJobs = string.Empty;
+    private string _statusJobProtokolle = string.Empty;
+    private string _globalerStatusText = string.Empty;
+
+    // --- Collections ---
+    private ObservableCollection<V_SESSION_MONITOR> _sitzungen;
+    private ObservableCollection<V_SQL> _sqlVerlauf;
+    private ObservableCollection<V_PROCESS> _prozesse;
+    private ObservableCollection<V_LOCK> _sperren;
+    private ObservableCollection<V_JOB> _jobs;
+    private ObservableCollection<V_JOB> _auffaelligeJobs;
+    private ObservableCollection<V_JOB_RUN_DETAILS> _ausgewaehlteJobProtokolle;
+
+    // --- Ausgewählte Zeilen ---
+    private V_SESSION_MONITOR _ausgewaehlteSitzung;
+    private V_SQL _ausgewaehltesSql;
+    private V_PROCESS _ausgewaehlterProzess;
+    private V_JOB _ausgewaehlterJob;
+    private V_LOCK _ausgewaehlteSperre;
+
+    // --- CollectionViews für alle Tabs ---
+    private ICollectionView _sitzungenAnsicht;
+    private ICollectionView _sqlVerlaufAnsicht;
+    private ICollectionView _prozesseAnsicht;
+    private ICollectionView _jobsAnsicht;
+    private ICollectionView _sperrenAnsicht;
+
+    // --- SQL-Detail-Felder ---
+    private string _ausgewaehlteSitzungSql = string.Empty;
+    private string _ausgewaehlteSitzungBindVars = string.Empty;
+    private string _ausgewaehlteSperreSql = string.Empty;
+
+    // --- Hilfszustand ---
+    private int _aktiverTabIndex;
+    private DateTime _letzteAktualisierung;
+
+    // --- Lookup-Tabelle für farbliches Highlighting von Systembenutzern (T-03) ---
+    // Schlüssel: Benutzername (Großbuchstaben), Wert: WPF-Farbname
+    private static readonly Dictionary<string, string> SystemBenutzerFarben =
+      new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+      {
+        { "SYSDRK",  "#FFF3E0" },   // Hellorange
+        { "SYSADM",  "#E3F2FD" },   // Hellblau
+        { "SYSMON",  "#E8F5E9" },   // Hellgrün
+      };
+
+    #endregion
+
+    #region Konstruktor
+
+    /// <summary>
+    /// Initialisiert das MainViewModel:
+    /// Collections und CollectionViews aufbauen, Commands registrieren,
+    /// Login-Event abonnieren und Hintergrundtask starten.
+    /// </summary>
+    public MainViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<MainViewModel> log, AuditLogViewModel auditLogVm)
+  : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      this.AuditLogVm = auditLogVm;
+
+      // 1. Collections initialisieren
+      _sitzungen = new ObservableCollection<V_SESSION_MONITOR>();
+      _sqlVerlauf = new ObservableCollection<V_SQL>();
+      _prozesse = new ObservableCollection<V_PROCESS>();
+      _sperren = new ObservableCollection<V_LOCK>();
+      _jobs = new ObservableCollection<V_JOB>();
+      _auffaelligeJobs = new ObservableCollection<V_JOB>();
+      _ausgewaehlteJobProtokolle = new ObservableCollection<V_JOB_RUN_DETAILS>();
+
+      // 2. CollectionViews mit Sortierung und Filter-Delegate konfigurieren
+      SitzungenAnsicht = CollectionViewSource.GetDefaultView(_sitzungen);
+      SitzungenAnsicht.SortDescriptions.Add(new SortDescription(nameof(V_SESSION_MONITOR.STATUS), ListSortDirection.Ascending));
+      SitzungenAnsicht.SortDescriptions.Add(new SortDescription(nameof(V_SESSION_MONITOR.SID), ListSortDirection.Ascending));
+      SitzungenAnsicht.Filter = FilterSitzungenDelegate;
+
+      SqlVerlaufAnsicht = CollectionViewSource.GetDefaultView(_sqlVerlauf);
+      SqlVerlaufAnsicht.Filter = FilterSqlDelegate;
+
+      ProzesseAnsicht = CollectionViewSource.GetDefaultView(_prozesse);
+      ProzesseAnsicht.SortDescriptions.Add(new SortDescription(nameof(V_PROCESS.PGA_USED_MEM), ListSortDirection.Descending));
+      ProzesseAnsicht.Filter = FilterProzesseDelegate;
+
+      JobsAnsicht = CollectionViewSource.GetDefaultView(_jobs);
+      JobsAnsicht.Filter = FilterJobsDelegate;
+
+      SperrenAnsicht = CollectionViewSource.GetDefaultView(_sperren);
+      SperrenAnsicht.SortDescriptions.Add(new SortDescription(nameof(V_LOCK.SID), ListSortDirection.Ascending));
+      SperrenAnsicht.Filter = FilterSperrenDelegate;
+
+      // 3. Commands registrieren
+      // Kill-Commands mit CanExecute: Schaltfläche nur aktiv wenn Zeile gewählt (T-13)
+      SitzungBeendenBefehl = new DelegateCommand(SitzungBeendenAusfuehren, () => _ausgewaehlteSitzung != null);
+      SperreBeendenBefehl = new DelegateCommand(SperreBeendenAusfuehren, () => _ausgewaehlteSperre != null);
+      // SQL-Kopieren-Command: nur aktiv wenn SQL-Zeile gewählt (T-06)
+      SqlKopierenBefehl = new DelegateCommand(SqlKopierenAusfuehren, () => _ausgewaehltesSql != null && !string.IsNullOrEmpty(_ausgewaehltesSql.SQL_FULLTEXT));
+      KopiereSitzungsSqlBefehl = new DelegateCommand(SqlKopierenAusfuehren, () => !string.IsNullOrEmpty(AktuellerSitzungSqlText));
+      KopiereHistorieSqlBefehl = new DelegateCommand(SqlHistorieKopierenAusfuehren, () => _ausgewaehltesSql != null && !string.IsNullOrEmpty(_ausgewaehltesSql.SQL_FULLTEXT));
+
+      LadeSqlBefehl = new DelegateCommand(LadeSqlAusfuehren);
+      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
+      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
+      SitzungenAktualisierenBefehl = new DelegateCommand(SitzungenAktualisierenAusfuehren);
+      SqlAktualisierenBefehl = new DelegateCommand(SqlAktualisierenAusfuehren);
+      ProzesseAktualisierenBefehl = new DelegateCommand(ProzesseAktualisierenAusfuehren);
+      SperrenAktualisierenBefehl = new DelegateCommand(SperrenAktualisierenAusfuehren);
+      JobsAktualisierenBefehl = new DelegateCommand(JobsAktualisierenAusfuehren);
+
+
+      // Tab-Navigation per Command (T-02/T-03)
+      // Tab-Reihenfolge: 0=Dashboard, 1=Sitzungen, 2=SQL, 3=Prozesse, 4=Jobs, 5=Sperren
+      WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
+      WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
+      WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
+      WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
+      WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
+
+      // Lifecycle-Commands (über Behavior gebunden – kein Code-Behind nötig)
+      LoadedBefehl = new DelegateCommand(OnLoaded);
+      UnloadedBefehl = new DelegateCommand(OnUnloaded);
+
+      // 4. Login-Event abonnieren
+      EventSystem.Subscribe<UserLoginEvent>(OnBenutzerAngemeldet);
+
+      // 5. Hintergrundtask starten
+      var taskEx = ServiceProvider.GetService<TaskEx>();
+      if (taskEx == null)
+      {
+        _log.LogCritical("Konstruktor: Hintergrund-Task (TaskEx) konnte nicht aufgelöst werden.");
+      }
+      else
+      {
+        taskEx.Init(HintergrundAktualisierung, null);
+        taskEx.IsBackgroundThread = true;
+        taskEx.ShouldFinishBeExecutedInGuiThread = true;
+        taskEx.Start();
+        _log.LogInformation("Konstruktor: Hintergrund-Aktualisierungstask erfolgreich gestartet.");
+      }
+    }
+
+    #endregion
+
+    #region Befehle
+
+    /// <summary>Lädt den SQL-Text für eine manuell eingegebene SID/Serial-Nummer.</summary>
+    public ICommand LadeSqlBefehl { get; private set; }
+
+    /// <summary>Lädt die Top 20 SQL-Statements nach Ausführungsanzahl und navigiert zum SQL-Tab.</summary>
+    public ICommand LadeTopSqlBefehl { get; private set; }
+
+    /// <summary>Lädt die Top 20 Prozesse nach PGA-Speicher und navigiert zum Prozesse-Tab.</summary>
+    public ICommand LadeTopProzesseBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Sitzungen-Tabelle manuell.</summary>
+    public ICommand SitzungenAktualisierenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die SQL-Historie manuell.</summary>
+    public ICommand SqlAktualisierenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Prozesse-Tabelle manuell.</summary>
+    public ICommand ProzesseAktualisierenBefehl { get; private set; }
+
+    /// <summary>Beendet die ausgewählte Session (mit Bestätigung). Nur aktiv wenn Zeile gewählt (T-13).</summary>
+    public ICommand SitzungBeendenBefehl { get; private set; }
+
+    /// <summary>Beendet die Session hinter der Sperre (mit Bestätigung). Nur aktiv wenn Zeile gewählt (T-13).</summary>
+    public ICommand SperreBeendenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Sperren-Tabelle manuell.</summary>
+    public ICommand SperrenAktualisierenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Jobs-Tabelle manuell.</summary>
+    public ICommand JobsAktualisierenBefehl { get; private set; }
+
+    /// <summary>Kopiert den SQL-Text der ausgewählten Zeile in die Zwischenablage (T-06).</summary>
+    public ICommand SqlKopierenBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Sitzungen-Tab.</summary>
+    public ICommand WechsleZuSitzungenBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum SQL-Tab.</summary>
+    public ICommand WechsleZuSqlBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Prozesse-Tab.</summary>
+    public ICommand WechsleZuProzesseBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Jobs-Tab.</summary>
+    public ICommand WechsleZuJobsBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Sperren-Tab.</summary>
+    public ICommand WechsleZuSperrenBefehl { get; private set; }
+
+    /// <summary>Wird beim Laden der View ausgeführt (über Behavior gebunden).</summary>
+    public ICommand LoadedBefehl { get; private set; }
+
+    /// <summary>Wird beim Entladen der View ausgeführt (über Behavior gebunden).</summary>
+    public ICommand UnloadedBefehl { get; private set; }
+    public DelegateCommand KopiereSitzungsSqlBefehl { get; private set; }
+    public DelegateCommand KopiereHistorieSqlBefehl { get; private set; }
+
+    #endregion
+
+    #region Eigenschaften – Eingabe und Status
+
+    /// <summary>Anzeigename des angemeldeten Benutzers.</summary>
+    public string Benutzer
+    {
+      get => _benutzer;
+      set => SetVal(ref _benutzer, value);
+    }
+
+    /// <summary>SQL-Text im AvalonEdit-Editor des Dashboards (manueller Abruf).</summary>
+    public string SqlInhalt
+    {
+      get => _sqlInhalt;
+      set => SetVal(ref _sqlInhalt, value);
+    }
+
+    /// <summary>Manuelle Eingabe der Session-ID für den SQL-Abruf.</summary>
+    public string SidEingabe
+    {
+      get => _sidEingabe;
+      set => SetVal(ref _sidEingabe, value);
+    }
+
+    /// <summary>Manuelle Eingabe der Seriennummer für den SQL-Abruf.</summary>
+    public string SerialEingabe
+    {
+      get => _serialEingabe;
+      set => SetVal(ref _serialEingabe, value);
+    }
+
+    /// <summary>Aktiver Tab-Index für Dashboard-Navigation (T-02/T-03).</summary>
+    public int AktiverTabIndex
+    {
+      get => _aktiverTabIndex;
+      set
+      {
+        SetVal(ref _aktiverTabIndex, value);
+        // T-07: Statuszeile unten bei Tab-Wechsel aktualisieren
+        GlobalenStatusTextAktualisieren();
+      }
+    }
+
+    /// <summary>
+    /// Kontext-sensitiver Statustext für die globale Statuszeile unten.
+    /// Zeigt je nach aktivem Tab den passenden Statustext an (T-07).
+    /// Bei aktiver Auswahl erscheint ein Hinweis zur pausierten Aktualisierung.
+    /// </summary>
+    public string GlobalerStatusText
+    {
+      get => _globalerStatusText;
+      set => SetVal(ref _globalerStatusText, value);
+    }
+
+    // --- Statuszeilen der einzelnen Tabs ---
+
+    /// <summary>Statuszeile des Sitzungen-Tabs mit Anzahl und Uhrzeit.</summary>
+    public string StatusSitzungen
+    {
+      get => _statusSitzungen;
+      set { SetVal(ref _statusSitzungen, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des SQL-Tabs.</summary>
+    public string StatusSql
+    {
+      get => _statusSql;
+      set { SetVal(ref _statusSql, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des Prozesse-Tabs.</summary>
+    public string StatusProzesse
+    {
+      get => _statusProzesse;
+      set { SetVal(ref _statusProzesse, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des Sperren-Tabs.</summary>
+    public string StatusSperren
+    {
+      get => _statusSperren;
+      set { SetVal(ref _statusSperren, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des Jobs-Tabs.</summary>
+    public string StatusJobs
+    {
+      get => _statusJobs;
+      set { SetVal(ref _statusJobs, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des Job-Protokoll-Panels.</summary>
+    public string StatusJobProtokolle
+    {
+      get => _statusJobProtokolle;
+      set => SetVal(ref _statusJobProtokolle, value);
+    }
+
+    #endregion
+
+    #region Eigenschaften – Filter (T-04: Filter für alle Tabs)
+
+    /// <summary>
+    /// Filtertext für den Sitzungen-Tab.
+    /// Durchsucht: USERNAME, OSUSER, MACHINE, TERMINAL, PROGRAM,
+    ///             STATUS, TYP, SID, SERIAL, PROCESS_ID, LOGON_TIME.
+    /// </summary>
+    public string FilterTextSitzungen
+    {
+      get => _filterTextSitzungen;
+      set
+      {
+        if (_filterTextSitzungen == value) return;
+        _filterTextSitzungen = value;
+        OnPropertyChanged(nameof(FilterTextSitzungen));
+        SitzungenAnsicht?.Refresh();
+      }
+    }
+
+    /// <summary>
+    /// Filtertext für den SQL-Tab.
+    /// Durchsucht: SQL_ID, SQL_FULLTEXT.
+    /// </summary>
+    public string FilterTextSql
+    {
+      get => _filterTextSql;
+      set
+      {
+        if (_filterTextSql == value) return;
+        _filterTextSql = value;
+        OnPropertyChanged(nameof(FilterTextSql));
+        SqlVerlaufAnsicht?.Refresh();
+      }
+    }
+
+    /// <summary>
+    /// Filtertext für den Prozesse-Tab.
+    /// Durchsucht: USERNAME, PROGRAM, SPID, BACKGROUND.
+    /// </summary>
+    public string FilterTextProzesse
+    {
+      get => _filterTextProzesse;
+      set
+      {
+        if (_filterTextProzesse == value) return;
+        _filterTextProzesse = value;
+        OnPropertyChanged(nameof(FilterTextProzesse));
+        ProzesseAnsicht?.Refresh();
+      }
+    }
+
+    /// <summary>
+    /// Filtertext für den Jobs-Tab.
+    /// Durchsucht: JOB_NAME, JOB_TYPE, JOB_ACTION, STATE, COMMENTS.
+    /// </summary>
+    public string FilterTextJobs
+    {
+      get => _filterTextJobs;
+      set
+      {
+        if (_filterTextJobs == value) return;
+        _filterTextJobs = value;
+        OnPropertyChanged(nameof(FilterTextJobs));
+        JobsAnsicht?.Refresh();
+      }
+    }
+
+    /// <summary>
+    /// Filtertext für den Sperren-Tab.
+    /// Durchsucht: USERNAME, OSUSER, MACHINE, PROGRAM, TYPE, STATUS_AKTUELL.
+    /// </summary>
+    public string FilterTextSperren
+    {
+      get => _filterTextSperren;
+      set
+      {
+        if (_filterTextSperren == value) return;
+        _filterTextSperren = value;
+        OnPropertyChanged(nameof(FilterTextSperren));
+        SperrenAnsicht?.Refresh();
+      }
+    }
+
+    #endregion
+
+    #region Eigenschaften – Collections und CollectionViews
+
+    /// <summary>Alle aktiven Benutzersitzungen aus V$SESSION.</summary>
+    public ObservableCollection<V_SESSION_MONITOR> Sitzungen
+    {
+      get => _sitzungen;
+      set => SetVal(ref _sitzungen, value);
+    }
+
+    /// <summary>SQL-Verlauf aus dem Oracle Shared Pool (V$SQL).</summary>
+    public ObservableCollection<V_SQL> SqlVerlauf
+    {
+      get => _sqlVerlauf;
+      set => SetVal(ref _sqlVerlauf, value);
+    }
+
+    /// <summary>Alle Oracle-Serverprozesse aus V$PROCESS.</summary>
+    public ObservableCollection<V_PROCESS> Prozesse
+    {
+      get => _prozesse;
+      set => SetVal(ref _prozesse, value);
+    }
+
+    /// <summary>Aktive Transaktionssperren aus V$LOCK (nur Typ TX).</summary>
+    public ObservableCollection<V_LOCK> Sperren
+    {
+      get => _sperren;
+      set => SetVal(ref _sperren, value);
+    }
+
+    /// <summary>Alle aktiven SYSADM Scheduler-Jobs.</summary>
+    public ObservableCollection<V_JOB> Jobs
+    {
+      get => _jobs;
+      set => SetVal(ref _jobs, value);
+    }
+
+    /// <summary>Jobs mit Status BROKEN, FAILED oder STOPPED (Dashboard-Warnanzeige).</summary>
+    public ObservableCollection<V_JOB> AuffaelligeJobs
+    {
+      get => _auffaelligeJobs;
+      set => SetVal(ref _auffaelligeJobs, value);
+    }
+
+    /// <summary>Ausführungsprotokoll des aktuell ausgewählten Jobs.</summary>
+    public ObservableCollection<V_JOB_RUN_DETAILS> AusgewaehlteJobProtokolle
+    {
+      get => _ausgewaehlteJobProtokolle;
+      set => SetVal(ref _ausgewaehlteJobProtokolle, value);
+    }
+
+    /// <summary>Gefilterte CollectionView der Sitzungen (für DataGrid-Binding).</summary>
+    public ICollectionView SitzungenAnsicht
+    {
+      get => _sitzungenAnsicht;
+      set => SetObj(ref _sitzungenAnsicht, value);
+    }
+
+    /// <summary>Gefilterte CollectionView der SQL-Historie.</summary>
+    public ICollectionView SqlVerlaufAnsicht
+    {
+      get => _sqlVerlaufAnsicht;
+      set => SetObj(ref _sqlVerlaufAnsicht, value);
+    }
+
+    /// <summary>Gefilterte CollectionView der Prozesse.</summary>
+    public ICollectionView ProzesseAnsicht
+    {
+      get => _prozesseAnsicht;
+      set => SetObj(ref _prozesseAnsicht, value);
+    }
+
+    /// <summary>Gefilterte CollectionView der Jobs.</summary>
+    public ICollectionView JobsAnsicht
+    {
+      get => _jobsAnsicht;
+      set => SetObj(ref _jobsAnsicht, value);
+    }
+
+    /// <summary>Gefilterte CollectionView der Sperren.</summary>
+    public ICollectionView SperrenAnsicht
+    {
+      get => _sperrenAnsicht;
+      set => SetObj(ref _sperrenAnsicht, value);
+    }
+
+    #endregion
+
+    #region Eigenschaften – Ausgewählte Objekte
+
+    /// <summary>
+    /// Aktuell ausgewählte Sitzung.
+    /// Lädt SQL-Text automatisch, aktualisiert CanExecute und pausiert Hintergrundaktualisierung (T-07).
+    /// </summary>
+    public V_SESSION_MONITOR AusgewaehlteSitzung
+    {
+      get => _ausgewaehlteSitzung;
+      set
+      {
+        SetObj(ref _ausgewaehlteSitzung, value);
+        ((DelegateCommand)SitzungBeendenBefehl).RaiseCanExecuteChanged();
+        AusgewaehlteSitzungSqlLaden();
+        GlobalenStatusTextAktualisieren();
+      }
+    }
+
+    /// <summary>SQL-Text der ausgewählten Sitzung.</summary>
+    public string AusgewaehlteSitzungSql
+    {
+      get => _ausgewaehlteSitzungSql;
+      set
+      {
+        SetVal(ref _ausgewaehlteSitzungSql, value);
+        OnPropertyChanged(nameof(IsSqlVerfuegbar));
+      }
+    }
+
+    /// <summary>Bind-Variablen des SQL-Statements der ausgewählten Sitzung.</summary>
+    public string AusgewaehlteSitzungBindVars
+    {
+      get => _ausgewaehlteSitzungBindVars;
+      set
+      {
+        SetVal(ref _ausgewaehlteSitzungBindVars, value);
+        OnPropertyChanged(nameof(IsBindVarsVerfuegbar));
+      }
+    }
+
+    /// <summary>
+    /// Gibt zurück ob SQL-Text vorhanden ist.
+    /// Wird für BoolToCollapsedConverter in XAML verwendet (T-03).
+    /// </summary>
+    public bool IsSqlVerfuegbar => !string.IsNullOrWhiteSpace(_ausgewaehlteSitzungSql)
+                                   && !_ausgewaehlteSitzungSql.StartsWith("Hinweis:");
+
+    /// <summary>
+    /// Gibt zurück ob Bind-Variablen vorhanden sind.
+    /// Wird für BoolToCollapsedConverter in XAML verwendet (T-03).
+    /// </summary>
+    public bool IsBindVarsVerfuegbar => !string.IsNullOrWhiteSpace(_ausgewaehlteSitzungBindVars);
+
+    /// <summary>
+    /// Aktuell ausgewählte Sperre.
+    /// Lädt SQL-Text automatisch und pausiert Hintergrundaktualisierung (T-07).
+    /// </summary>
+    public V_LOCK AusgewaehlteSperre
+    {
+      get => _ausgewaehlteSperre;
+      set
+      {
+        SetObj(ref _ausgewaehlteSperre, value);
+        ((DelegateCommand)SperreBeendenBefehl).RaiseCanExecuteChanged();
+        AusgewaehlteSperreSqlLaden();
+        GlobalenStatusTextAktualisieren();
+      }
+    }
+
+    /// <summary>SQL-Text der blockierenden Session hinter der ausgewählten Sperre.</summary>
+    public string AusgewaehlteSperreSql
+    {
+      get => _ausgewaehlteSperreSql;
+      set
+      {
+        SetVal(ref _ausgewaehlteSperreSql, value);
+        OnPropertyChanged(nameof(IsSperreSqlVerfuegbar)); 
+      }
+    }
+
+    /// <summary>
+    /// Aktuell ausgewähltes SQL-Statement im SQL-Tab.
+    /// Aktiviert den SQL-Kopieren-Button wenn eine Zeile gewählt ist (T-06).
+    /// </summary>
+    public V_SQL AusgewaehltesSql
+    {
+      get => _ausgewaehltesSql;
+      set
+      {
+        SetObj(ref _ausgewaehltesSql, value);
+        ((DelegateCommand)SqlKopierenBefehl).RaiseCanExecuteChanged();
+        GlobalenStatusTextAktualisieren();
+        AktualisiereHistorieSqlAnsicht();
+      }
+    }
+
+    /// <summary>Aktuell ausgewählter Prozess im Prozesse-Tab.</summary>
+    public V_PROCESS AusgewaehlterProzess
+    {
+      get => _ausgewaehlterProzess;
+      set
+      {
+        SetObj(ref _ausgewaehlterProzess, value);
+        GlobalenStatusTextAktualisieren();  
+      }
+    }
+
+    /// <summary>
+    /// Aktuell ausgewählter Job.
+    /// Lädt das Ausführungsprotokoll automatisch.
+    /// </summary>
+    public V_JOB AusgewaehlterJob
+    {
+      get => _ausgewaehlterJob;
+      set
+      {
+        SetObj(ref _ausgewaehlterJob, value);
+        if (value != null) JobAuswaehlen(value);
+        GlobalenStatusTextAktualisieren();  
+      }
+    }
+
+    /// <summary>
+    /// Gibt zurück ob SQL-Text für die ausgewählte Sperre vorhanden ist.
+    /// Wird für BoolToCollapsedConverter in XAML verwendet.
+    /// </summary>
+    public bool IsSperreSqlVerfuegbar => !string.IsNullOrWhiteSpace(_ausgewaehlteSperreSql)
+                                       && !_ausgewaehlteSperreSql.StartsWith("Hinweis:");
+
+    private bool _istSqlFormatiert;
+    private string _ausgewaehlteSitzungSqlFormatiert;
+
+    public bool IstSqlFormatiert
+    {
+      get => _istSqlFormatiert;
+      set
+      {
+        SetVal(ref _istSqlFormatiert, value);
+        OnPropertyChanged(nameof(AktuellerSitzungSqlText));
+      }
+    }
+
+    public string AktuellerSitzungSqlText => !IstSqlFormatiert
+    ? (_ausgewaehlteSitzungSqlFormatiert ?? AusgewaehlteSitzungSql)
+    : AusgewaehlteSitzungSql;
+
+    private bool _istSqlHistorieFormatiert;
+    private string _sqlHistorieFormatiert;
+
+    public bool IstSqlHistorieFormatiert
+    {
+      get => _istSqlHistorieFormatiert;
+      set
+      {
+        SetVal(ref _istSqlHistorieFormatiert, value); 
+        OnPropertyChanged(nameof(AktuellerHistorieSqlText));
+      }
+    }
+
+    public string AktuellerHistorieSqlText => !IstSqlHistorieFormatiert
+    ? (_sqlHistorieFormatiert ?? _ausgewaehltesSql?.SQL_FULLTEXT ?? string.Empty)
+    : (_ausgewaehltesSql?.SQL_FULLTEXT ?? string.Empty);
+
+    #endregion
+
+    #region Eigenschaften – Dashboard-Kennzahlen
+
+    /// <summary>Anzahl aktiver Sessions (STATUS = ACTIVE) für die grüne Dashboard-Karte.</summary>
+    public int AnzahlAktiveSitzungen
+    {
+      get
+      {
+        if (_sitzungen == null) return 0;
+        int anzahl = 0;
+        foreach (var s in _sitzungen)
+          if (s.STATUS == "ACTIVE") anzahl++;
+        return anzahl;
+      }
+    }
+
+    /// <summary>Gesamtanzahl aktiver TX-Sperren für die rote Dashboard-Karte.</summary>
+    public int AnzahlSperren => _sperren != null ? _sperren.Count : 0;
+
+    /// <summary>Anzahl auffälliger Jobs (BROKEN/FAILED/STOPPED) für die orangefarbene Dashboard-Karte.</summary>
+    public int AnzahlAuffaelligeJobs => _auffaelligeJobs != null ? _auffaelligeJobs.Count : 0;
+
+    #endregion
+
+    #region Eigenschaften – Highlighting (T-03)
+
+    /// <summary>
+    /// Gibt die Hintergrundfarbe für den Benutzernamen der ausgewählten Sitzung zurück.
+    /// Systembenutzer (SYSDRK, SYSADM, SYSMON) erhalten eine definierte Farbe.
+    /// Rückgabe als Hex-String für XAML-Konverter.
+    /// </summary>
+    public string AusgewaehlteSitzungHintergrundfarbe
+    {
+      get
+      {
+        if (_ausgewaehlteSitzung?.USERNAME == null) return "Transparent";
+        string farbe;
+        return SystemBenutzerFarben.TryGetValue(_ausgewaehlteSitzung.USERNAME, out farbe)
+          ? farbe
+          : "Transparent";
+      }
+    }
+
+    /// <summary>
+    /// Gibt die Hintergrundfarbe für einen Benutzernamen zurück (für DataGrid-RowStyle).
+    /// Wird über MultiBinding oder Converter im XAML genutzt.
+    /// </summary>
+    public static string GetBenutzerFarbe(string benutzername)
+    {
+      if (string.IsNullOrEmpty(benutzername)) return "Transparent";
+      string farbe;
+      return SystemBenutzerFarben.TryGetValue(benutzername, out farbe) ? farbe : "Transparent";
+    }
+
+    #endregion
+
+    #region Öffentliche Methoden
+
+    /// <summary>
+    /// Beendet den Hintergrundtask sauber beim Schließen der Anwendung.
+    /// </summary>
+    public void MonitoringBeenden()
+    {
+      var taskEx = ServiceProvider.GetService<TaskEx>();
+      if (taskEx != null)
+      {
+        taskEx.Stop();
+        _log.LogInformation("MonitoringBeenden: Hintergrundtask sauber gestoppt.");
+      }
+    }
+
+    #endregion
+
+    #region Private Methoden – Initialisierung und Lifecycle
+
+    /// <summary>
+    /// Reagiert auf das Login-Event: Benutzernamen setzen und alle Daten initial laden.
+    /// </summary>
+    private void OnBenutzerAngemeldet(UserLoginEvent ev)
+    {
+      var anmeldeDaten = ServiceProvider.GetService<LoginData>();
+      BsdApplication.InvokeIfRequired(() =>
+        Benutzer = string.Format("Guten Tag, {0}",
+          anmeldeDaten != null ? anmeldeDaten.IntervenantText : string.Empty));
+
+      SitzungenAktualisierenAusfuehren();
+      SqlAktualisierenAusfuehren();
+      ProzesseAktualisierenAusfuehren();
+      SperrenAktualisierenAusfuehren();
+      JobsAktualisierenAusfuehren();
+    }
+
+    /// <summary>Wird beim Laden der View aufgerufen.</summary>
+    private void OnLoaded()
+    {
+      _log.LogInformation("OnLoaded: MainView wurde erfolgreich geladen.");
+      GlobalenStatusTextAktualisieren();
+    }
+
+    /// <summary>Wird beim Entladen der View aufgerufen – stoppt das Monitoring sauber.</summary>
+    private void OnUnloaded()
+    {
+      _log.LogInformation("OnUnloaded: MainView wird entladen – Monitoring wird gestoppt.");
+      MonitoringBeenden();
+    }
+
+    #endregion
+
+    #region Private Methoden – Daten aktualisieren
+
+    /// <summary>Lädt alle aktiven Sitzungen und aktualisiert Collection und Statuszeile.</summary>
+    private void SitzungenAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("SitzungenAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      var liste = dbQuery.GetActiveSessionsList();
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(Sitzungen, liste);
+        SitzungenAnsicht.Refresh();
+        _letzteAktualisierung = DateTime.Now;
+        StatusSitzungen = string.Format("Aktualisiert: {0} Sitzungen  |  Stand: {1:HH:mm:ss}",
+          liste.Count, _letzteAktualisierung);
+        OnPropertyChanged(nameof(AnzahlAktiveSitzungen));
+      });
+    }
+
+    /// <summary>Lädt die Top 100 SQL-Statements nach Buffer Gets.</summary>
+    private void SqlAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("SqlAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      try
+      {
+        var liste = dbQuery.GetAllSqlList();
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(SqlVerlauf, liste);
+          SqlVerlaufAnsicht.Refresh();
+          StatusSql = string.Format("Aktualisiert: {0} SQL-Einträge  |  Stand: {1:HH:mm:ss}",
+            liste.Count, DateTime.Now);
+        });
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "SqlAktualisieren: Fehler beim Laden.");
+        BsdApplication.InvokeIfRequired(() => StatusSql = "Fehler beim Laden der SQL-Daten.");
+      }
+    }
+
+    /// <summary>Lädt alle Oracle-Serverprozesse.</summary>
+    private void ProzesseAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("ProzesseAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      var liste = dbQuery.GetAllProcessesList();
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(Prozesse, liste);
+        ProzesseAnsicht.Refresh();
+        StatusProzesse = string.Format("Aktualisiert: {0} Prozesse  |  Stand: {1:HH:mm:ss}",
+          liste.Count, DateTime.Now);
+      });
+    }
+
+    /// <summary>
+    /// Analyse-Modus: Top 20 SQL nach Ausführungsanzahl laden und zum SQL-Tab navigieren.
+    /// Filter wird dabei automatisch zurückgesetzt.
+    /// </summary>
+    private void LadeTopSqlAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("LadeTopSql: DbQuery nicht verfügbar."); return; }
+
+      // 1. Filter für SQL-Tab leeren, damit die Ergebnisse nicht versteckt werden
+      FilterTextSql = string.Empty;
+
+      try
+      {
+        var liste = dbQuery.GetTopExecutedSqlList();
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(SqlVerlauf, liste);
+          SqlVerlaufAnsicht.Refresh();
+          StatusSql = string.Format("Top {0} SQL (nach Ausführungen)  |  Stand: {1:HH:mm:ss}",
+            liste.Count, DateTime.Now);
+          AktiverTabIndex = 2;
+        });
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "LadeTopSql: Fehler beim Laden.");
+        BsdApplication.InvokeIfRequired(() => StatusSql = "Fehler beim Laden der SQL-Daten.");
+      }
+    }
+
+    /// <summary>
+    /// Analyse-Modus: Top 20 Prozesse nach PGA-Speicher laden und zum Prozesse-Tab navigieren.
+    /// Filter wird dabei automatisch zurückgesetzt.
+    /// </summary>
+    private void LadeTopProzesseAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("LadeTopProzesse: DbQuery nicht verfügbar."); return; }
+
+      // 1. Filter für Prozesse-Tab leeren
+      FilterTextProzesse = string.Empty;
+
+      try
+      {
+        var liste = dbQuery.GetTopMemoryProcessesList();
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(Prozesse, liste);
+          ProzesseAnsicht.Refresh();
+          StatusProzesse = string.Format("Top {0} Prozesse (nach Speicher)  |  Stand: {1:HH:mm:ss}",
+            liste.Count, DateTime.Now);
+          AktiverTabIndex = 3;
+        });
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "LadeTopProzesse: Fehler beim Laden.");
+        BsdApplication.InvokeIfRequired(() => StatusProzesse = "Fehler beim Laden der Prozessdaten.");
+      }
+    }
+
+    /// <summary>Lädt SQL-Text für manuell eingegebene SID/Serial (Dashboard-Eingabe).</summary>
+    private void LadeSqlAusfuehren()
+    {
+      decimal sid, serial;
+      if (!decimal.TryParse(SidEingabe, out sid) || !decimal.TryParse(SerialEingabe, out serial))
+      {
+        SqlInhalt = "Ungültige Eingabe: Bitte gültige SID und Serial-Nummer eingeben.";
+        _log.LogWarning("LadeSql: Abbruch – ungültige Eingabewerte.");
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("LadeSql: DbQuery nicht verfügbar."); return; }
+
+      var ergebnis = dbQuery.GetCurrentSqlText(sid, serial);
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        SqlInhalt = string.IsNullOrEmpty(ergebnis.Item2)
+          ? ergebnis.Item1
+          : ergebnis.Item1 + "\n\n-- Bind-Variablen:\n" + ergebnis.Item2;
+      });
+    }
+
+    /// <summary>Lädt alle TX-Sperren und aktualisiert Dashboard-Zähler.</summary>
+    private void SperrenAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("SperrenAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      var liste = dbQuery.GetLockList();
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(Sperren, liste);
+        SperrenAnsicht.Refresh();
+        OnPropertyChanged(nameof(AnzahlSperren));
+        StatusSperren = liste.Count > 0
+          ? string.Format("{0} aktive Sperren gefunden  |  Stand: {1:HH:mm:ss}", liste.Count, DateTime.Now)
+          : string.Format("Keine aktiven Sperren  |  Stand: {0:HH:mm:ss}", DateTime.Now);
+      });
+    }
+
+    /// <summary>Lädt alle Jobs und auffällige Jobs, aktualisiert Dashboard-Karte.</summary>
+    private void JobsAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("JobsAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      var alleJobs = dbQuery.GetJobList();
+      var auffaelligJobs = dbQuery.GetAuffaelligeJobList();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(Jobs, alleJobs);
+        CollectionAktualisieren(AuffaelligeJobs, auffaelligJobs);
+        JobsAnsicht.Refresh();
+        OnPropertyChanged(nameof(AnzahlAuffaelligeJobs));
+        StatusJobs = string.Format("Aktualisiert: {0} Jobs  |  {1} auffällig  |  Stand: {2:HH:mm:ss}",
+          alleJobs.Count, auffaelligJobs.Count, DateTime.Now);
+      });
+    }
+
+    /// <summary>Lädt das Ausführungsprotokoll des ausgewählten Jobs.</summary>
+    private void JobAuswaehlen(V_JOB ausgewaehlterJob)
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("JobAuswaehlen: DbQuery nicht verfügbar."); return; }
+
+      var protokolle = dbQuery.GetJobLog(ausgewaehlterJob.JOB_NAME);
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(AusgewaehlteJobProtokolle, protokolle);
+        StatusJobProtokolle = protokolle != null && protokolle.Count > 0
+          ? string.Format("{0} Protokolleinträge für: {1}", protokolle.Count, ausgewaehlterJob.JOB_NAME)
+          : string.Format("Kein Protokoll verfügbar für: {0}", ausgewaehlterJob.JOB_NAME);
+      });
+    }
+
+    #endregion
+
+    #region Private Methoden – SQL laden für ausgewählte Zeile
+
+    /// <summary>
+    /// Lädt SQL-Text und Bind-Variablen der ausgewählten Sitzung.
+    /// Setzt IsSqlVerfuegbar und IsBindVarsVerfuegbar für XAML-Converter (T-03).
+    /// </summary>
+    private void AusgewaehlteSitzungSqlLaden()
+    {
+      if (_ausgewaehlteSitzung == null ||
+          _ausgewaehlteSitzung.SID == null ||
+          _ausgewaehlteSitzung.SERIAL == null)
+      {
+        AusgewaehlteSitzungSql = string.Empty;
+        _ausgewaehlteSitzungSqlFormatiert = string.Empty;
+        AusgewaehlteSitzungBindVars = string.Empty;
+
+        KopiereSitzungsSqlBefehl?.RaiseCanExecuteChanged();
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null)
+      {
+        _log.LogError("AusgewaehlteSitzungSqlLaden: DbQuery nicht verfügbar.");
+        return;
+      }
+
+      var ergebnis = dbQuery.GetCurrentSqlText(
+          _ausgewaehlteSitzung.SID.Value,
+          _ausgewaehlteSitzung.SERIAL.Value);
+
+      AusgewaehlteSitzungSql = ergebnis.Item1;
+
+      string rawSql = ergebnis.Item1 ?? string.Empty;
+      _ausgewaehlteSitzungSqlFormatiert = SqlFormatterHelper.Format(rawSql);
+
+      AusgewaehlteSitzungBindVars = ergebnis.Item2;
+
+      OnPropertyChanged(nameof(AktuellerSitzungSqlText));
+
+      KopiereSitzungsSqlBefehl?.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Lädt SQL-Text der blockierenden Session hinter der ausgewählten Sperre (T-05).
+    /// </summary>
+    private void AusgewaehlteSperreSqlLaden()
+    {
+      if (_ausgewaehlteSperre == null)
+      {
+        AusgewaehlteSperreSql = string.Empty;
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("AusgewaehlteSperreSqlLaden: DbQuery nicht verfügbar."); return; }
+
+      var ergebnis = dbQuery.GetCurrentSqlText(_ausgewaehlteSperre.SID, _ausgewaehlteSperre.SERIAL);
+      AusgewaehlteSperreSql = ergebnis.Item1;
+    }
+
+    private void AktualisiereHistorieSqlAnsicht()
+    {
+      if (_ausgewaehltesSql == null)
+      {
+        _sqlHistorieFormatiert = string.Empty;
+      }
+      else
+      {
+        string rawSql = _ausgewaehltesSql.SQL_FULLTEXT ?? string.Empty;
+        int index = rawSql.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase);
+        _sqlHistorieFormatiert = (index > 0) ? rawSql.Substring(index).Trim() : rawSql;
+      }
+
+      OnPropertyChanged(nameof(AktuellerHistorieSqlText));
+      KopiereHistorieSqlBefehl?.RaiseCanExecuteChanged();
+    }
+
+    private void SqlHistorieKopierenAusfuehren()
+    {
+      if (!string.IsNullOrEmpty(AktuellerHistorieSqlText))
+        System.Windows.Clipboard.SetText(AktuellerHistorieSqlText);
+    }
+    #endregion
+
+    #region Private Methoden – Kill Session / Kill Lock
+
+    /// <summary>
+    /// Beendet die ausgewählte Session nach Bestätigung.
+    /// Zeile wird sofort aus der Collection entfernt (T-06).
+    /// Hinweis: Erfordert Oracle-Systemrecht ALTER SYSTEM.
+    /// </summary>
+    private void SitzungBeendenAusfuehren()
+    {
+      if (_ausgewaehlteSitzung == null) return;
+
+      // 1. Dialog für den Kommentar öffnen
+      var commentDialog = new KillSessionCommentView();
+      commentDialog.Owner = Application.Current.MainWindow;
+      if (commentDialog.ShowDialog() != true) return; // Abbruch bei Schließen oder Abbrechen
+
+      string kommentar = commentDialog.Comment; // Diesen String brauchen wir später für das INSERT in die Audit-Tabelle
+
+      // 2. Bestätigung anzeigen
+      string details = string.Format(
+          "SID:     {0}\nSerial:   {1}\nBenutzer: {2}\nMaschine: {3}\nProgramm: {4}\nGrund: {5}",
+          _ausgewaehlteSitzung.SID,
+          _ausgewaehlteSitzung.SERIAL,
+          _ausgewaehlteSitzung.USERNAME,
+          _ausgewaehlteSitzung.MACHINE,
+          _ausgewaehlteSitzung.PROGRAM,
+          kommentar);
+
+      var bestaetigung = MessageBox.Show(
+          "Möchten Sie wirklich die folgende Session beenden?\n\n" + details,
+          "Session beenden – Bestätigung erforderlich",
+          MessageBoxButton.YesNo,
+          MessageBoxImage.Warning);
+
+      if (bestaetigung != MessageBoxResult.Yes) return;
+
+      // 3. Ausführung
+      try
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        if (dbQuery == null) { _log.LogError("SitzungBeenden: DbQuery nicht verfügbar."); return; }
+
+        decimal sid = _ausgewaehlteSitzung.SID.Value;
+        decimal serial = _ausgewaehlteSitzung.SERIAL.Value;
+        string user = _ausgewaehlteSitzung.USERNAME ?? "–";
+
+        dbQuery.KillSession(sid, serial);
+
+        // Hier werden wir später das INSERT in MONITOR_AUDIT_LOG mit 'kommentar' hinzufügen
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          Sitzungen.Remove(_ausgewaehlteSitzung);
+          AusgewaehlteSitzung = null;
+          AusgewaehlteSitzungSql = string.Empty;
+          AusgewaehlteSitzungBindVars = string.Empty;
+          SitzungenAnsicht.Refresh();
+          OnPropertyChanged(nameof(AnzahlAktiveSitzungen));
+          StatusSitzungen = string.Format("Session SID={0} ({1}) wurde beendet  |  Stand: {2:HH:mm:ss}", sid, user, DateTime.Now);
+        });
+
+        _log.LogInformation("SitzungBeenden: SID={0}, Serial={1}, User={2} beendet. Kommentar: {3}", sid, serial, user, kommentar);
+
+        MessageBox.Show(
+            string.Format("Session SID={0} (Benutzer: {1}) wurde erfolgreich beendet.", sid, user),
+            "Session beenden",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "SitzungBeenden: Fehler beim Beenden der Session.");
+        MessageBox.Show(
+            "Fehler beim Beenden der Session:\n\n" + ausnahme.Message +
+            "\n\nHinweis: Eventuell ist die Session geschützt oder Sie haben keine Berechtigung.",
+            "Fehler – Session konnte nicht beendet werden",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+      }
+    }
+
+    /// <summary>
+    /// Beendet die Session hinter der ausgewählten Sperre nach Bestätigung.
+    /// Zeile wird sofort aus der Collection entfernt (T-06).
+    /// </summary>
+    private void SperreBeendenAusfuehren()
+    {
+      if (_ausgewaehlteSperre == null) return;
+
+      // 1. Dialog für den Kommentar öffnen
+      var commentDialog = new KillSessionCommentView();
+      commentDialog.Owner = Application.Current.MainWindow;
+      if (commentDialog.ShowDialog() != true) return;
+
+      string kommentar = commentDialog.Comment;
+
+      // 2. Bestätigung
+      string details = string.Format(
+          "SID:       {0}\nSerial:    {1}\nBenutzer:  {2}\nMaschine:  {3}\nLock-Typ:  {4}\nGrund: {5}",
+          _ausgewaehlteSperre.SID,
+          _ausgewaehlteSperre.SERIAL,
+          _ausgewaehlteSperre.USERNAME,
+          _ausgewaehlteSperre.MACHINE,
+          _ausgewaehlteSperre.STATUS_AKTUELL,
+          kommentar);
+
+      var bestaetigung = MessageBox.Show(
+          "Möchten Sie die Session hinter dieser Sperre wirklich beenden?\n\n" + details,
+          "Sperre aufheben – Bestätigung erforderlich",
+          MessageBoxButton.YesNo,
+          MessageBoxImage.Warning);
+
+      if (bestaetigung != MessageBoxResult.Yes) return;
+
+      // 3. Ausführung
+      try
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        if (dbQuery == null) { _log.LogError("SperreBeenden: DbQuery nicht verfügbar."); return; }
+
+        decimal sid = _ausgewaehlteSperre.SID;
+        decimal serial = _ausgewaehlteSperre.SERIAL;
+        string user = _ausgewaehlteSperre.USERNAME ?? "–";
+
+        dbQuery.KillSession(sid, serial);
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          Sperren.Remove(_ausgewaehlteSperre);
+          AusgewaehlteSperre = null;
+          AusgewaehlteSperreSql = string.Empty;
+          SperrenAnsicht.Refresh();
+          OnPropertyChanged(nameof(AnzahlSperren));
+          StatusSperren = string.Format("Session SID={0} ({1}) hinter Sperre beendet  |  Stand: {2:HH:mm:ss}", sid, user, DateTime.Now);
+        });
+
+        _log.LogInformation("SperreBeenden: SID={0}, Serial={1}, User={2} beendet. Kommentar: {3}", sid, serial, user, kommentar);
+
+        MessageBox.Show(
+            string.Format("Session SID={0} (Benutzer: {1}) hinter der Sperre erfolgreich beendet.", sid, user),
+            "Sperre aufgehoben",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "SperreBeenden: Fehler beim Beenden der Session hinter der Sperre.");
+        MessageBox.Show(
+            "Fehler beim Aufheben der Sperre:\n\n" + ausnahme.Message +
+            "\n\nHinweis: Eventuell ist die Session geschützt oder Sie haben keine Berechtigung.",
+            "Fehler – Sperre konnte nicht aufgehoben werden",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+      }
+    }
+
+    /// <summary>
+    /// Kopiert den SQL-Volltext der ausgewählten SQL-Zeile in die Windows-Zwischenablage (T-06).
+    /// Nur ausführbar wenn eine Zeile mit nicht leerem SQL_FULLTEXT ausgewählt ist.
+    /// </summary>
+    private void SqlKopierenAusfuehren()
+    {
+      string textZuKopieren = AktuellerSitzungSqlText;
+
+      if (string.IsNullOrEmpty(textZuKopieren))
+      {
+        _log.LogWarning("SqlKopieren: Kein SQL-Text zum Kopieren vorhanden.");
+        return;
+      }
+
+      try
+      {
+        Clipboard.SetText(textZuKopieren);
+        _log.LogInformation("SqlKopieren: SQL erfolgreich in die Zwischenablage kopiert.");
+      }
+      catch (Exception ausnahme)
+      {
+        _log.LogError(ausnahme, "SqlKopieren: Fehler beim Kopieren in die Zwischenablage.");
+      }
+    }
+
+    #endregion
+
+    #region Private Methoden – Hintergrundaktualisierung
+
+    /// <summary>
+    /// Hintergrundthread: Aktualisiert alle 30 Sekunden automatisch die DB-Daten.
+    /// T-07: Übersprungen wenn der Benutzer eine Zeile ausgewählt hat.
+    /// </summary>
+    private void HintergrundAktualisierung(TaskExInterop interop)
+    {
+      _log.LogInformation("HintergrundAktualisierung: Thread gestartet.");
+
+      while (!interop.ShouldBeStopped)
+      {
+        // T-07: Pause wenn Benutzer eine Zeile betrachtet
+        bool benutzerHatAuswahl =
+            _ausgewaehlteSitzung != null ||
+            _ausgewaehlteSperre != null ||
+            _ausgewaehlterProzess != null ||
+            _ausgewaehlterJob != null ||
+            _ausgewaehltesSql != null;
+        if (benutzerHatAuswahl)
+        {
+          _log.LogDebug("HintergrundAktualisierung: Übersprungen – aktive Benutzerauswahl.");
+          System.Threading.Thread.Sleep(10000);
+          continue;
+        }
+
+        try
+        {
+          var dbQuery = ServiceProvider.GetService<DbQuery>();
+          if (dbQuery == null)
+          {
+            _log.LogError("HintergrundAktualisierung: DbQuery nicht verfügbar – Thread wird beendet.");
+            return;
+          }
+
+          interop.DataMap["Sitzungen"] = dbQuery.GetActiveSessionsList();
+          interop.DataMap["Prozesse"] = dbQuery.GetAllProcessesList();
+          interop.DataMap["Sperren"] = dbQuery.GetLockList();
+          interop.DataMap["AuffaelligeJobs"] = dbQuery.GetAuffaelligeJobList();
+
+          HintergrundAktualisierungAbschliessen(interop);
+
+          _log.LogDebug("HintergrundAktualisierung: Zyklus abgeschlossen. Nächster in 30 Sek.");
+          System.Threading.Thread.Sleep(30000);
+        }
+        catch (Exception ausnahme)
+        {
+          _log.LogError(ausnahme, "HintergrundAktualisierung: Fehler im Zyklus. Retry in 10 Sek.");
+          System.Threading.Thread.Sleep(10000);
+        }
+      }
+
+      _log.LogInformation("HintergrundAktualisierung: Thread sauber beendet.");
+    }
+
+    /// <summary>
+    /// Überträgt die Hintergrunddaten in die UI-Collections (läuft im UI-Thread).
+    /// </summary>
+    private void HintergrundAktualisierungAbschliessen(TaskExInterop interop)
+    {
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        object obj1;
+        if (interop.DataMap.TryGetValue("Sitzungen", out obj1) && obj1 is List<V_SESSION_MONITOR>)
+        {
+          var sitzungen = (List<V_SESSION_MONITOR>)obj1;
+          CollectionAktualisieren(Sitzungen, sitzungen);
+          SitzungenAnsicht.Refresh();
+          _letzteAktualisierung = DateTime.Now;
+          StatusSitzungen = string.Format("Aktualisiert: {0} Sitzungen  |  Stand: {1:HH:mm:ss}",
+            sitzungen.Count, _letzteAktualisierung);
+          OnPropertyChanged(nameof(AnzahlAktiveSitzungen));
+        }
+
+        object obj2;
+        if (interop.DataMap.TryGetValue("Prozesse", out obj2) && obj2 is List<V_PROCESS>)
+        {
+          CollectionAktualisieren(Prozesse, (List<V_PROCESS>)obj2);
+          ProzesseAnsicht.Refresh();
+        }
+
+        object obj3;
+        if (interop.DataMap.TryGetValue("Sperren", out obj3) && obj3 is List<V_LOCK>)
+        {
+          var sperren = (List<V_LOCK>)obj3;
+          CollectionAktualisieren(Sperren, sperren);
+          SperrenAnsicht.Refresh();
+          OnPropertyChanged(nameof(AnzahlSperren));
+          StatusSperren = sperren.Count > 0
+            ? string.Format("{0} aktive Sperren  |  Stand: {1:HH:mm:ss}", sperren.Count, DateTime.Now)
+            : string.Format("Keine aktiven Sperren  |  Stand: {0:HH:mm:ss}", DateTime.Now);
+        }
+
+        object obj4;
+        if (interop.DataMap.TryGetValue("AuffaelligeJobs", out obj4) && obj4 is List<V_JOB>)
+        {
+          CollectionAktualisieren(AuffaelligeJobs, (List<V_JOB>)obj4);
+          OnPropertyChanged(nameof(AnzahlAuffaelligeJobs));
+        }
+
+        _log.LogDebug("HintergrundAktualisierungAbschliessen: UI-Collections aktualisiert.");
+      });
+    }
+
+    #endregion
+
+    #region Private Methoden – Filter-Delegates (T-04)
+
+    /// <summary>
+    /// Filter-Delegate für den Sitzungen-Tab.
+    /// Berücksichtigt: USERNAME, OSUSER, MACHINE, TERMINAL, PROGRAM,
+    ///                 STATUS, TYPE, SID, SERIAL, PROCESS_ID, LOGON_TIME.
+    /// </summary>
+    private bool FilterSitzungenDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextSitzungen)) return true;
+      var s = obj as V_SESSION_MONITOR;
+      if (s == null) return false;
+      string f = _filterTextSitzungen.Trim();
+
+      return Enthaelt(s.USERNAME, f) || Enthaelt(s.OSUSER, f) || Enthaelt(s.MACHINE, f) ||
+             Enthaelt(s.TERMINAL, f) || Enthaelt(s.PROGRAM, f) || Enthaelt(s.STATUS, f) ||
+             Enthaelt(s.TYPE, f) || Enthaelt(s.PROCESS_ID, f) || Enthaelt(s.SID?.ToString(), f) ||
+             Enthaelt(s.SERIAL?.ToString(), f) ||
+             Enthaelt(s.LOGON_TIME?.ToString("dd.MM.yyyy HH:mm"), f);
+    }
+
+    /// <summary>
+    /// Filter-Delegate für den SQL-Tab.
+    /// Berücksichtigt: SQL_ID, SQL_FULLTEXT.
+    /// </summary>
+    private bool FilterSqlDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextSql)) return true;
+      var s = obj as V_SQL;
+      if (s == null) return false;
+      string f = _filterTextSql.Trim();
+
+      return Enthaelt(s.SQL_ID, f) || Enthaelt(s.SQL_FULLTEXT, f) ||
+             Enthaelt(s.EXECUTIONS?.ToString(), f) || Enthaelt(s.DISK_READS?.ToString(), f) ||
+             Enthaelt(s.BUFFER_GETS?.ToString(), f) || Enthaelt(s.CPU_TIME?.ToString(), f);
+    }
+
+    /// <summary>
+    /// Filter-Delegate für den Prozesse-Tab.
+    /// Berücksichtigt: USERNAME, PROGRAM, SPID, BACKGROUND.
+    /// </summary>
+    private bool FilterProzesseDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextProzesse)) return true;
+      var p = obj as V_PROCESS;
+      if (p == null) return false;
+      string f = _filterTextProzesse.Trim();
+
+      return Enthaelt(p.USERNAME, f) || Enthaelt(p.PROGRAM, f) || Enthaelt(p.BACKGROUND, f) ||
+             Enthaelt(p.SPID?.ToString(), f) || Enthaelt(p.ADDR, f);
+    }
+
+    /// <summary>
+    /// Filter-Delegate für den Jobs-Tab.
+    /// Berücksichtigt: JOB_NAME, JOB_TYPE, JOB_ACTION, STATE, COMMENTS.
+    /// </summary>
+    private bool FilterJobsDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextJobs)) return true;
+      var j = obj as V_JOB;
+      if (j == null) return false;
+      string f = _filterTextJobs.Trim();
+
+      return Enthaelt(j.JOB_NAME, f) ||
+             Enthaelt(j.JOB_TYPE, f) ||
+             Enthaelt(j.JOB_ACTION, f) ||
+             Enthaelt(j.STATE, f) ||
+             Enthaelt(j.COMMENTS, f) ||
+             Enthaelt(j.START_DATE?.ToString("dd.MM.yyyy HH:mm"), f) ||
+             Enthaelt(j.LAST_START_DATE?.ToString("dd.MM.yyyy HH:mm"), f) || 
+             Enthaelt(j.NEXT_RUN_DATE?.ToString("dd.MM.yyyy HH:mm"), f) ||   
+             Enthaelt(j.REPEAT_INTERVAL, f);
+    }
+
+    /// <summary>
+    /// Filter-Delegate für den Sperren-Tab.
+    /// Berücksichtigt: USERNAME, OSUSER, MACHINE, PROGRAM, TYPE, STATUS_AKTUELL.
+    /// </summary>
+    private bool FilterSperrenDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextSperren)) return true;
+      var l = obj as V_LOCK;
+      if (l == null) return false;
+      string f = _filterTextSperren.Trim();
+
+      return Enthaelt(l.SID.ToString(), f) || Enthaelt(l.SERIAL.ToString(), f) ||
+             Enthaelt(l.USERNAME, f) || Enthaelt(l.OSUSER, f) || Enthaelt(l.MACHINE, f) ||
+             Enthaelt(l.PROGRAM, f) || Enthaelt(l.TYPE, f) || Enthaelt(l.STATUS_AKTUELL, f) ||
+             Enthaelt(l.ANGEFRAGT, f);
+    }
+
+    #endregion
+
+    #region Private Methoden – Status (T-07)
+
+    /// <summary>
+    /// Aktualisiert die globale Statuszeile unten kontext-sensitiv (T-07).
+    ///
+    /// Logik:
+    ///   – Wenn eine Zeile ausgewählt ist: Hinweis auf pausierte Aktualisierung
+    ///   – Sonst: Statustext des aktiven Tabs oder "Automatische Aktualisierung alle 30 Sekunden"
+    /// </summary>
+    private void GlobalenStatusTextAktualisieren()
+    {
+      bool benutzerHatAuswahl =
+      _ausgewaehlteSitzung != null ||
+      _ausgewaehlteSperre != null ||
+      _ausgewaehlterProzess != null || 
+      _ausgewaehlterJob != null ||
+      _ausgewaehltesSql != null;       
+      if (benutzerHatAuswahl)
+      {
+        GlobalerStatusText =
+          "Keine automatische Aktualisierung. " +
+          "Bitte Auswahl aufheben oder \"Aktualisieren\" betätigen, um die Automatik wieder zu aktivieren.";
+        return;
+      }
+
+      switch (_aktiverTabIndex)
+      {
+        case 0:
+          GlobalerStatusText = "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden";
+          break;
+        case 1:
+          GlobalerStatusText = string.IsNullOrEmpty(_statusSitzungen)
+            ? "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden"
+            : _statusSitzungen;
+          break;
+        case 2:
+          GlobalerStatusText = string.IsNullOrEmpty(_statusSql)
+            ? "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden"
+            : _statusSql;
+          break;
+        case 3:
+          GlobalerStatusText = string.IsNullOrEmpty(_statusProzesse)
+            ? "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden"
+            : _statusProzesse;
+          break;
+        case 4:
+          GlobalerStatusText = string.IsNullOrEmpty(_statusJobs)
+            ? "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden"
+            : _statusJobs;
+          break;
+        case 5:
+          GlobalerStatusText = string.IsNullOrEmpty(_statusSperren)
+            ? "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden"
+            : _statusSperren;
+          break;
+        default:
+          GlobalerStatusText = "Oracle Database Monitor  |  Automatische Aktualisierung alle 30 Sekunden";
+          break;
+      }
+    }
+
+    #endregion
+
+    #region Private Hilfsmethoden
+
+    /// <summary>
+    /// Ersetzt den Inhalt einer ObservableCollection ohne neue Referenz.
+    /// Erhält bestehende UI-Bindings und CollectionView-Konfigurationen.
+    /// </summary>
+    private static void CollectionAktualisieren<T>(ObservableCollection<T> collection, List<T> neueDaten)
+    {
+      collection.Clear();
+      if (neueDaten == null) return;
+      foreach (var eintrag in neueDaten)
+        collection.Add(eintrag);
+    }
+
+    /// <summary>
+    /// Prüft ob ein Text einen Suchbegriff enthält (Groß-/Kleinschreibung ignoriert).
+    /// Gibt false zurück wenn der Text null ist.
+    /// C# 7.3 kompatibel (kein String.Contains mit StringComparison-Overload).
+    /// </summary>
+    private static bool Enthaelt(string text, string suchbegriff)
+    {
+      if (text == null || suchbegriff == null) return false;
+      return text.IndexOf(suchbegriff, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private void AuswahlAufheben()
+    {
+      AusgewaehlteSitzung = null;
+      AusgewaehlteSperre = null;
+      AusgewaehlterProzess = null;
+      AusgewaehlterJob = null;
+      AusgewaehltesSql = null;
+
+      GlobalenStatusTextAktualisieren();
+    }
+
+    #endregion
+  }
+}

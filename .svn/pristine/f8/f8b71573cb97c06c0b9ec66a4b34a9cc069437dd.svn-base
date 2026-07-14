@@ -1,0 +1,186 @@
+﻿using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using DbMonitorWPF.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class SitzungenViewModel : DiViewModel
+  {
+    private readonly ILogger _log;
+    private string _filterTextSitzungen;
+    private string _statusSitzungen;
+    private string _aktuellerSitzungSqlText;
+    private string _ausgewaehlteSitzungBindVars;
+    private V_SESSION_MONITOR _ausgewaehlteSitzung;
+    private bool _istSqlFormatiert = false;
+    private string _rawSqlFromDb;
+    private string _formattedSqlFromDb;
+    private bool _istTop20ProzesseModus = false;
+
+    public ObservableCollection<V_SESSION_MONITOR> Sitzungen { get; }
+    public ICollectionView SitzungenAnsicht { get; }
+
+    public SitzungenViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<SitzungenViewModel> log)
+      : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      Sitzungen = new ObservableCollection<V_SESSION_MONITOR>();
+      SitzungenAnsicht = CollectionViewSource.GetDefaultView(Sitzungen);
+      SitzungenAnsicht.Filter = FilterSitzungenDelegate;
+
+      SitzungenAktualisierenBefehl = new DelegateCommand(SitzungenAktualisierenAusfuehren);
+      SitzungBeendenBefehl = new DelegateCommand(SitzungBeendenAusfuehren, () => AusgewaehlteSitzung != null);
+      KopiereSitzungsSqlBefehl = new DelegateCommand(KopiereSitzungsSqlAusfuehren, () => !string.IsNullOrEmpty(AktuellerSitzungSqlText));
+    }
+
+    public bool IsSqlVerfuegbar => !string.IsNullOrWhiteSpace(AktuellerSitzungSqlText) && !AktuellerSitzungSqlText.StartsWith("Hinweis:");
+    public bool IsBindVarsVerfuegbar => !string.IsNullOrEmpty(AusgewaehlteSitzungBindVars);
+
+    #region Properties
+
+    public V_SESSION_MONITOR AusgewaehlteSitzung
+    {
+      get => _ausgewaehlteSitzung;
+      set
+      {
+        SetObj(ref _ausgewaehlteSitzung, value);
+        AusgewaehlteSitzungSqlLaden();
+        ((DelegateCommand)SitzungBeendenBefehl).RaiseCanExecuteChanged();
+      }
+    }
+
+    public bool IstSqlFormatiert
+    {
+      get => _istSqlFormatiert;
+      set
+      {
+        SetVal(ref _istSqlFormatiert, value);
+        AktuellerSitzungSqlText = IstSqlFormatiert ? _rawSqlFromDb : _formattedSqlFromDb;
+      }
+    }
+
+    public string FilterTextSitzungen
+    {
+      get => _filterTextSitzungen;
+      set { SetVal(ref _filterTextSitzungen, value); SitzungenAnsicht.Refresh(); }
+    }
+
+    public string StatusSitzungen
+    {
+      get => _statusSitzungen ?? string.Empty; // Если null, отдаем пустую строку
+      set => SetVal(ref _statusSitzungen, value);
+    }
+    public string AktuellerSitzungSqlText
+    {
+      get => _aktuellerSitzungSqlText;
+      set { SetVal(ref _aktuellerSitzungSqlText, value); OnPropertyChanged(nameof(IsSqlVerfuegbar)); }
+    }
+    public string AusgewaehlteSitzungBindVars { get => _ausgewaehlteSitzungBindVars; set => SetVal(ref _ausgewaehlteSitzungBindVars, value); }
+
+    #endregion
+
+    public ICommand KopiereSitzungsSqlBefehl { get; }
+    public ICommand SitzungenAktualisierenBefehl { get; }
+    public ICommand SitzungBeendenBefehl { get; }
+
+    private void KopiereSitzungsSqlAusfuehren()
+    {
+      if (!string.IsNullOrEmpty(AktuellerSitzungSqlText)) Clipboard.SetText(AktuellerSitzungSqlText);
+    }
+
+    private void SitzungenAktualisierenAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      var liste = dbQuery?.GetAktuelleSessionsList() ?? new System.Collections.Generic.List<V_SESSION_MONITOR>();
+
+      BsdApplication.InvokeIfRequired(() => {
+        CollectionAktualisieren(Sitzungen, liste);
+        SitzungenAnsicht.Refresh();
+
+        StatusSitzungen = StatusHelper.FormatStatus(liste.Count, "Sitzungen");
+      });
+    }
+    private void AusgewaehlteSitzungSqlLaden()
+    {
+      if (AusgewaehlteSitzung?.SID == null)
+      {
+        _rawSqlFromDb = _formattedSqlFromDb = AktuellerSitzungSqlText = "";
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      var ergebnis = dbQuery.GetCurrentSqlText(AusgewaehlteSitzung.SID.Value, AusgewaehlteSitzung.SERIAL.Value);
+
+      _rawSqlFromDb = ergebnis.Item1;
+      _formattedSqlFromDb = ergebnis.Item2;
+      AusgewaehlteSitzungBindVars = ergebnis.Item3;
+
+      AktuellerSitzungSqlText = IstSqlFormatiert ? _rawSqlFromDb : _formattedSqlFromDb;
+      OnPropertyChanged(nameof(IsBindVarsVerfuegbar));
+    }
+
+    private bool FilterSitzungenDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(FilterTextSitzungen)) return true;
+      var s = obj as V_SESSION_MONITOR;
+      string f = FilterTextSitzungen.Trim();
+      return Enthaelt(s.USERNAME, f) || Enthaelt(s.OSUSER, f) || Enthaelt(s.MACHINE, f) ||
+             Enthaelt(s.TERMINAL, f) || Enthaelt(s.PROGRAM, f) || Enthaelt(s.STATUS, f) ||
+             Enthaelt(s.TYPE, f) || Enthaelt(s.PROCESS_ID, f) || Enthaelt(s.SID?.ToString(), f) ||
+             Enthaelt(s.SERIAL?.ToString(), f) ||
+             Enthaelt(s.LOGON_TIME?.ToString("dd.MM.yyyy HH:mm"), f);
+    }
+
+    private void SitzungBeendenAusfuehren()
+    {
+      var zuBeendendeSitzung = AusgewaehlteSitzung;
+      if (zuBeendendeSitzung == null) return;
+
+      var commentDialog = new KillSessionCommentView { Owner = Application.Current.MainWindow };
+      if (commentDialog.ShowDialog() != true) return;
+
+      // Angenommen, das Dialog-Ergebnis (der Grund) ist hier verfügbar:
+      string grund = commentDialog.Comment; // Passe das an deine Property im Dialog an!
+
+      try
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        if (dbQuery == null) throw new Exception("DbQuery Service konnte nicht geladen werden.");
+
+        // Hier den neuen, erweiterten KillSession-Aufruf nutzen:
+        dbQuery.KillSession(
+            zuBeendendeSitzung.SID.Value,
+            zuBeendendeSitzung.SERIAL.Value,
+            grund, // Das ist dein DAL_REASON
+            AktuellerSitzungSqlText, // SQL Text
+            zuBeendendeSitzung.PROGRAM,
+            zuBeendendeSitzung.OSUSER,
+            zuBeendendeSitzung.TERMINAL
+        );
+
+        BsdApplication.InvokeIfRequired(() => {
+          Sitzungen.Remove(zuBeendendeSitzung);
+          if (AusgewaehlteSitzung == zuBeendendeSitzung) AusgewaehlteSitzung = null;
+        });
+      }
+      catch (Exception ex)
+      {
+        _log.LogError(ex, "Fehler beim Beenden der Session.");
+        MessageBox.Show("Fehler beim Beenden: " + ex.Message);
+      }
+    }
+  }
+}

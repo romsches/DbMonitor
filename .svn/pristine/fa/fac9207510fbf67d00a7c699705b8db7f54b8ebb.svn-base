@@ -1,0 +1,27 @@
+﻿using System.Windows;
+using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Highlighting;
+
+namespace Bsd.DbMonitorWPF.Behaviors
+{
+  public static class AvalonEditBehaviors
+  {
+    public static readonly DependencyProperty SyntaxHighlightingProperty =
+        DependencyProperty.RegisterAttached(
+            "SyntaxHighlighting",
+            typeof(string),
+            typeof(AvalonEditBehaviors),
+            new PropertyMetadata(null, OnSyntaxHighlightingChanged));
+
+    public static void SetSyntaxHighlighting(UIElement element, string value) => element.SetValue(SyntaxHighlightingProperty, value);
+    public static string GetSyntaxHighlighting(UIElement element) => (string)element.GetValue(SyntaxHighlightingProperty);
+
+    private static void OnSyntaxHighlightingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+      if (d is TextEditor editor && e.NewValue is string highlightingName)
+      {
+        editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition(highlightingName);
+      }
+    }
+  }
+}

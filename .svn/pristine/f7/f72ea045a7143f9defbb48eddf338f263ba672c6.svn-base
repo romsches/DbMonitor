@@ -1,0 +1,129 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class JobsViewModel : DiViewModel
+  {
+    private readonly ILogger _log;
+    private string _filterTextJobs = string.Empty;
+    private string _statusJobs;
+    private string _statusJobProtokolle;
+    private V_JOB _ausgewaehlterJob;
+    public ICommand FilterFehlerhafteJobsCommand { get; }
+    public ObservableCollection<V_JOB> Jobs { get; }
+    public ObservableCollection<V_JOB> AuffaelligeJobs { get; }
+    public ObservableCollection<V_JOB_RUN_DETAILS> AusgewaehlteJobProtokolle { get; }
+    public ICollectionView JobsAnsicht { get; }
+
+    public JobsViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<JobsViewModel> log)
+       : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      Jobs = new ObservableCollection<V_JOB>();
+      AuffaelligeJobs = new ObservableCollection<V_JOB>();
+      AusgewaehlteJobProtokolle = new ObservableCollection<V_JOB_RUN_DETAILS>();
+
+      JobsAnsicht = CollectionViewSource.GetDefaultView(Jobs);
+      JobsAnsicht.Filter = FilterJobsDelegate;
+
+      JobsAktualisierenBefehl = new DelegateCommand(JobsAktualisierenAusfuehren);
+    }
+
+    #region Properties
+
+    public V_JOB AusgewaehlterJob
+    {
+      get => _ausgewaehlterJob;
+      set
+      {
+        SetObj(ref _ausgewaehlterJob, value);
+        if (value != null) JobAuswaehlen(value);
+      }
+    }
+
+    public string FilterTextJobs
+    {
+      get => _filterTextJobs;
+      set { SetVal(ref _filterTextJobs, value); JobsAnsicht?.Refresh(); }
+    }
+
+    public string StatusJobs { get => _statusJobs; set => SetVal(ref _statusJobs, value); }
+    public string StatusJobProtokolle { get => _statusJobProtokolle; set => SetVal(ref _statusJobProtokolle, value); }
+
+    #endregion
+
+    public ICommand JobsAktualisierenBefehl { get; }
+
+    private void JobsAktualisierenAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) return;
+
+      var alleJobs = dbQuery.GetJobList() ?? new List<V_JOB>();
+      var auffaelligJobs = dbQuery.GetAuffaelligeJobList() ?? new List<V_JOB>();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(Jobs, alleJobs);
+        CollectionAktualisieren(AuffaelligeJobs, auffaelligJobs);
+        JobsAnsicht?.Refresh();
+
+        // Стандартный формат статуса
+        StatusJobs = StatusHelper.FormatStatus(alleJobs.Count, "Jobs") +
+                     $" ({auffaelligJobs.Count} auffällig)";
+
+        ServiceProvider.GetService<MainViewModel>()?.AktualisiereDashboard();
+      });
+    }
+
+    private void JobAuswaehlen(V_JOB job)
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      var protokolle = dbQuery?.GetJobLog(job.JOB_NAME) ?? new List<V_JOB_RUN_DETAILS>();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(AusgewaehlteJobProtokolle, protokolle);
+        StatusJobProtokolle = protokolle.Count > 0
+            ? $"{protokolle.Count} Protokolle für {job.JOB_NAME}"
+            : $"Kein Protokoll für {job.JOB_NAME}";
+      });
+    }
+
+    private bool FilterJobsDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextJobs)) return true;
+      if (obj is V_JOB j)
+      {
+        string f = _filterTextJobs.Trim();
+        return Enthaelt(j.JOB_NAME, f) || Enthaelt(j.JOB_TYPE, f) ||
+               Enthaelt(j.JOB_ACTION, f) || Enthaelt(j.STATE, f) ||
+               Enthaelt(j.COMMENTS, f) || Enthaelt(j.REPEAT_INTERVAL, f);
+      }
+      return false;
+    }
+    private void FilterFehlerhafteAusfuehren()
+    {
+      // Включаем фильтр: только те, где FAILURE_COUNT > 0 или STATUS != 'SUCCEEDED'
+      JobsAnsicht.Filter = (obj) => {
+        if (obj is V_JOB j) return j.FAILURE_COUNT > 0 || j.STATUS != "SUCCEEDED";
+        return false;
+      };
+    }
+
+  }
+}

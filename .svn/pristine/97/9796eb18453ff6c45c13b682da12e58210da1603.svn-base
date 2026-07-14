@@ -1,0 +1,68 @@
+﻿using System.Windows;
+using System.Windows.Controls;
+using System.ComponentModel;
+using Bsd.DbMonitorWPF.ViewModels;
+using ICSharpCode.AvalonEdit.Highlighting;
+using static SQL.Formatter.SqlFormatter;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  /// <summary>
+  /// Code-Behind für die MainView.
+  /// Zentrale View, die als Container für die verschiedenen Überwachungsmodule fungiert.
+  /// </summary>
+  public partial class MainView : UserControl
+  {
+    #region Konstruktor
+
+    /// <summary>
+    /// Initialisiert eine neue Instanz der <see cref="MainView"/> Klasse.
+    /// </summary>
+    public MainView()
+    {
+      InitializeComponent();
+    }
+
+    #endregion
+
+    #region Event-Handler
+
+    /// <summary>
+    /// Behandelt das Kopieren des Inhalts einer ausgewählten DataGrid-Zelle in die Zwischenablage.
+    /// </summary>
+    /// <param name="sender">Das auslösende MenuItem.</param>
+    /// <param name="e">Die Routing-Event-Argumente.</param>
+    private void CopySelectedCell_Click(object sender, RoutedEventArgs e)
+    {
+      if (sender is MenuItem menuItem && menuItem.Parent is ContextMenu contextMenu)
+      {
+        if (contextMenu.PlacementTarget is DataGridCell cell)
+        {
+          HandleCellCopy(cell);
+        }
+      }
+    }
+
+    #endregion
+
+    #region Private Methoden
+
+    /// <summary>
+    /// Extrahiert den Textinhalt einer DataGrid-Zelle und kopiert ihn in die Zwischenablage.
+    /// </summary>
+    /// <param name="cell">Die zu kopierende DataGrid-Zelle.</param>
+    private void HandleCellCopy(DataGridCell cell)
+    {
+      if (cell.Content is TextBlock textBlock)
+      {
+        Clipboard.SetText(textBlock.Text);
+      }
+      else if (cell.Content is string text)
+      {
+        Clipboard.SetText(text);
+      }
+    }
+
+    #endregion
+  }
+}

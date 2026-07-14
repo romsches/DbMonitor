@@ -1,0 +1,157 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class JobsViewModel : DiViewModel
+  {
+    private readonly ILogger _log;
+    private string _filterTextJobs = string.Empty;
+    private string _statusJobs;
+    private string _statusJobProtokolle;
+    private V_JOB _ausgewaehlterJob;
+
+    public ObservableCollection<V_JOB> Jobs { get; }
+    public ObservableCollection<V_JOB> AuffaelligeJobs { get; }
+    public ObservableCollection<V_JOB_RUN_DETAILS> AusgewaehlteJobProtokolle { get; }
+    public ICollectionView JobsAnsicht { get; }
+
+    public JobsViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<JobsViewModel> log)
+       : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      Jobs = new ObservableCollection<V_JOB>();
+      AuffaelligeJobs = new ObservableCollection<V_JOB>();
+      AusgewaehlteJobProtokolle = new ObservableCollection<V_JOB_RUN_DETAILS>();
+
+      JobsAnsicht = CollectionViewSource.GetDefaultView(Jobs);
+      JobsAnsicht.Filter = FilterJobsDelegate;
+
+      JobsAktualisierenBefehl = new DelegateCommand(JobsAktualisierenAusfuehren);
+    }
+
+    public V_JOB AusgewaehlterJob
+    {
+      get => _ausgewaehlterJob;
+      set
+      {
+        SetObj(ref _ausgewaehlterJob, value);
+        if (value != null) JobAuswaehlen(value);
+      }
+    }
+
+    public string FilterTextJobs
+    {
+      get => _filterTextJobs;
+      set { SetVal(ref _filterTextJobs, value); JobsAnsicht?.Refresh(); }
+    }
+
+    public string StatusJobs
+    {
+      get => _statusJobs;
+      set => SetVal(ref _statusJobs, value);
+    }
+
+    public string StatusJobProtokolle
+    {
+      get => _statusJobProtokolle;
+      set => SetVal(ref _statusJobProtokolle, value);
+    }
+
+    public ICommand JobsAktualisierenBefehl { get; }
+
+    private void JobsAktualisierenAusfuehren()
+    {
+      StatusJobs = "Wird geladen...";
+
+      System.Threading.Tasks.Task.Run(() =>
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        var alleJobs = dbQuery?.GetJobList() ?? new List<V_JOB>();
+        var auffaelligJobs = dbQuery?.GetAuffaelligeJobList() ?? new List<V_JOB>();
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(Jobs, alleJobs);
+          CollectionAktualisieren(AuffaelligeJobs, auffaelligJobs);
+          JobsAnsicht?.Refresh();
+          StatusJobs = string.Format("Aktualisiert: {0} Jobs  |  {1} auffällig  |  Stand: {2:HH:mm:ss}",
+              alleJobs.Count, auffaelligJobs.Count, DateTime.Now);
+          var mainVm = ServiceProvider.GetService<MainViewModel>();
+          mainVm?.AktualisiereDashboard();
+        });
+      });
+    }
+
+    private void JobAuswaehlen(V_JOB ausgewaehlterJob)
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      var protokolle = dbQuery?.GetJobLog(ausgewaehlterJob.JOB_NAME) ?? new List<V_JOB_RUN_DETAILS>();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(AusgewaehlteJobProtokolle, protokolle);
+        StatusJobProtokolle = protokolle.Count > 0
+            ? string.Format("{0} Protokolleinträge für: {1}", protokolle.Count, ausgewaehlterJob.JOB_NAME)
+            : string.Format("Kein Protokoll verfügbar für: {0}", ausgewaehlterJob.JOB_NAME);
+      });
+    }
+
+    private bool FilterJobsDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextJobs)) return true;
+      if (obj is V_JOB j)
+      {
+        string f = _filterTextJobs.Trim();
+        return Enthaelt(j.JOB_NAME, f) ||
+               Enthaelt(j.JOB_TYPE, f) ||
+               Enthaelt(j.JOB_ACTION, f) ||
+               Enthaelt(j.STATE, f) ||
+               Enthaelt(j.COMMENTS, f) ||
+               Enthaelt(j.START_DATE?.ToString("dd.MM.yyyy HH:mm"), f) ||
+               Enthaelt(j.LAST_START_DATE?.ToString("dd.MM.yyyy HH:mm"), f) ||
+               Enthaelt(j.NEXT_RUN_DATE?.ToString("dd.MM.yyyy HH:mm"), f) ||
+               Enthaelt(j.REPEAT_INTERVAL, f);
+      }
+      return false;
+    }
+
+    // Hilfsmethoden, damit der Code kompiliert
+    protected void SetVal<T>(ref T field, T value, [CallerMemberName] string name = null)
+    {
+      field = value;
+      OnPropertyChanged(name);
+    }
+
+    protected void SetObj<T>(ref T field, T value, [CallerMemberName] string name = null)
+    {
+      field = value;
+      OnPropertyChanged(name);
+    }
+
+    protected void CollectionAktualisieren<T>(ObservableCollection<T> collection, List<T> neueDaten)
+    {
+      collection.Clear();
+      foreach (var item in neueDaten) collection.Add(item);
+    }
+
+    protected bool Enthaelt(string text, string suchbegriff)
+    {
+      return text != null && text.IndexOf(suchbegriff, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+  }
+}

@@ -1,0 +1,41 @@
+﻿using System.Windows;
+using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  /// <summary>
+  /// Code-Behind für die JobsView.
+  /// Verantwortlich für die Anzeige der Datenbank-Jobs und deren Statusüberwachung.
+  /// </summary>
+  public partial class JobsView : UserControl
+  {
+    #region Konstruktor
+
+    /// <summary>
+    /// Initialisiert eine neue Instanz der <see cref="JobsView"/> Klasse.
+    /// </summary>
+    public JobsView()
+    {
+      InitializeComponent();
+      this.Loaded += OnViewLoaded;
+    }
+
+    #endregion
+
+    #region Event-Handler
+
+    /// <summary>
+    /// Löst beim Laden der View den initialen Aktualisierungsbefehl für die Jobs aus.
+    /// </summary>
+    private void OnViewLoaded(object sender, RoutedEventArgs e)
+    {
+      if (DataContext is JobsViewModel vm)
+      {
+        vm.JobsAktualisierenBefehl.Execute(null);
+      }
+    }
+
+    #endregion
+  }
+}

@@ -1,0 +1,188 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.DbMonitorWPF.Views;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using DbMonitorWPF.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class SperrenViewModel : DiViewModel
+  {
+    private readonly ILogger _log;
+    private string _filterTextSperren = string.Empty;
+    private string _statusSperren = string.Empty;
+    private string _ausgewaehlteSperreSql = string.Empty;
+    private V_LOCK _ausgewaehlteSperre;
+
+    public ObservableCollection<V_LOCK> Sperren { get; }
+    public ICollectionView SperrenAnsicht { get; }
+
+    public SperrenViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<SperrenViewModel> log)
+        : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      Sperren = new ObservableCollection<V_LOCK>();
+      SperrenAnsicht = CollectionViewSource.GetDefaultView(Sperren);
+      SperrenAnsicht.Filter = FilterSperrenDelegate;
+
+      SperrenAktualisierenBefehl = new DelegateCommand(SperrenAktualisierenAusfuehren);
+      SperreBeendenBefehl = new DelegateCommand(SperreBeendenAusfuehren, () => AusgewaehlteSperre != null);
+    }
+
+    #region Eigenschaften
+
+    public V_LOCK AusgewaehlteSperre
+    {
+      get => _ausgewaehlteSperre;
+      set
+      {
+        SetObj(ref _ausgewaehlteSperre, value);
+        AusgewaehlteSperreSqlLaden();
+        ((DelegateCommand)SperreBeendenBefehl).RaiseCanExecuteChanged();
+      }
+    }
+
+    public string AusgewaehlteSperreSql
+    {
+      get => _ausgewaehlteSperreSql;
+      set => SetVal(ref _ausgewaehlteSperreSql, value);
+    }
+
+    public bool IsSperreSqlVerfuegbar => !string.IsNullOrWhiteSpace(AusgewaehlteSperreSql);
+
+    public string FilterTextSperren
+    {
+      get => _filterTextSperren;
+      set { SetVal(ref _filterTextSperren, value); SperrenAnsicht?.Refresh(); }
+    }
+
+    public string StatusSperren
+    {
+      get => _statusSperren;
+      set => SetVal(ref _statusSperren, value);
+    }
+
+    #endregion
+
+    #region Befehle
+
+    public ICommand SperrenAktualisierenBefehl { get; }
+    public ICommand SperreBeendenBefehl { get; }
+
+    #endregion
+
+    private void SperrenAktualisierenAusfuehren()
+    {
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) return;
+
+      var liste = dbQuery.GetLockList() ?? new List<V_LOCK>();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        Sperren.Clear(); // Очищаем коллекцию полностью
+        foreach (var item in liste) Sperren.Add(item); // Добавляем свежие данные
+
+        SperrenAnsicht?.Refresh();
+        StatusSperren = StatusHelper.FormatStatus(Sperren.Count, "aktive Sperren");
+      });
+    }
+    private void AusgewaehlteSperreSqlLaden()
+    {
+      if (_ausgewaehlteSperre == null)
+      {
+        AusgewaehlteSperreSql = string.Empty;
+        OnPropertyChanged(nameof(IsSperreSqlVerfuegbar));
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      var ergebnis = dbQuery?.GetCurrentSqlText(_ausgewaehlteSperre.SID, _ausgewaehlteSperre.SERIAL);
+      AusgewaehlteSperreSql = ergebnis?.RohSql ?? string.Empty;
+      OnPropertyChanged(nameof(IsSperreSqlVerfuegbar));
+    }
+
+    private void SperreBeendenAusfuehren()
+    {
+      if (_ausgewaehlteSperre == null) return;
+
+      var commentDialog = new KillSessionCommentView { Owner = Application.Current.MainWindow };
+      if (commentDialog.ShowDialog() != true) return;
+
+      // WICHTIG: Hier den Grund aus dem Dialog holen! 
+      // (Ich nehme an, deine View hat eine Property 'Comment' oder ähnlich)
+      string grund = commentDialog.Comment;
+
+      try
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        if (dbQuery == null) return;
+
+        // Jetzt alle 7 benötigten Parameter übergeben:
+        dbQuery.KillSession(
+            _ausgewaehlteSperre.SID,
+            _ausgewaehlteSperre.SERIAL,
+            grund,
+            _ausgewaehlteSperreSql,
+            _ausgewaehlteSperre.PROGRAM,
+            _ausgewaehlteSperre.OSUSER,
+            _ausgewaehlteSperre.MACHINE
+        );
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          Sperren.Remove(_ausgewaehlteSperre);
+          AusgewaehlteSperre = null;
+          SperrenAnsicht?.Refresh();
+        });
+      }
+      catch (Exception ex)
+      {
+        _log.LogError(ex, "Fehler beim Beenden der Session.");
+        MessageBox.Show($"Fehler beim Aufheben der Sperre: {ex.Message}");
+      }
+    }
+    private bool FilterSperrenDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextSperren)) return true;
+      if (obj is V_LOCK l)
+      {
+        string f = _filterTextSperren.Trim();
+        // Используем метод Enthaelt из родительского DiViewModel
+        return Enthaelt(l.SID.ToString(), f) || Enthaelt(l.SERIAL.ToString(), f) ||
+               Enthaelt(l.USERNAME, f) || Enthaelt(l.OSUSER, f) ||
+               Enthaelt(l.MACHINE, f) || Enthaelt(l.PROGRAM, f) ||
+               Enthaelt(l.TYPE, f) || Enthaelt(l.STATUS_AKTUELL, f);
+      }
+      return false;
+    }
+
+    /// <summary>
+    /// Aktualisiert die Daten der Sperren-Collection ohne DB-Neuabruf.
+    /// </summary>
+    public void AktualisierenIntern(List<V_LOCK> daten)
+    {
+      // 1. Benutze den Helper mit der korrekten Collection 'Sperren'
+      CollectionHelper.Sync(Sperren, daten);
+
+      // 2. Refresh der Ansicht
+      SperrenAnsicht?.Refresh();
+
+      // 3. Status aktualisieren (beachte den geänderten Text)
+      StatusSperren = StatusHelper.FormatStatus(Sperren.Count, "aktive Sperren");
+    }
+  }
+}

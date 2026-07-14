@@ -1,0 +1,142 @@
+﻿using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class SqlhistorieViewModel : DiViewModel
+  {
+    private V_SQL _ausgewaehltesSql;
+    private string _filterTextSql;
+    private bool _istSqlHistorieFormatiert;
+    private string _statusSql;
+    private string _sqlHistorieFormatiert;
+
+    public string StatusSql
+    {
+      get => _statusSql;
+      set => SetVal(ref _statusSql, value);
+    }
+
+    public ObservableCollection<V_SQL> SqlVerlauf { get; }
+    public ICollectionView SqlVerlaufAnsicht { get; }
+
+    public SqlhistorieViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<SqlhistorieViewModel> log)
+        : base(serviceProvider, oraProvider, log)
+    {
+      SqlVerlauf = new ObservableCollection<V_SQL>();
+      SqlVerlaufAnsicht = CollectionViewSource.GetDefaultView(SqlVerlauf);
+      SqlVerlaufAnsicht.Filter = FilterSqlDelegate;
+
+      SqlAktualisierenBefehl = new DelegateCommand(SqlAktualisierenAusfuehren);
+      KopiereHistorieSqlBefehl = new DelegateCommand(KopiereHistorieSqlAusfuehren, () => AusgewaehltesSql != null);
+
+      // Вызов SqlAktualisierenAusfuehren() удален из конструктора, 
+      // так как теперь загрузка происходит через Loaded-событие во View.
+    }
+
+    public V_SQL AusgewaehltesSql
+    {
+      get => _ausgewaehltesSql;
+      set
+      {
+        SetObj(ref _ausgewaehltesSql, value);
+        AktualisiereHistorieSqlAnsicht();
+        OnPropertyChanged(nameof(AktuellerHistorieSqlText));
+        ((DelegateCommand)KopiereHistorieSqlBefehl).RaiseCanExecuteChanged();
+      }
+    }
+
+    public bool IstSqlHistorieFormatiert
+    {
+      get => _istSqlHistorieFormatiert;
+      set
+      {
+        SetVal(ref _istSqlHistorieFormatiert, value);
+        OnPropertyChanged(nameof(AktuellerHistorieSqlText));
+      }
+    }
+
+    public string AktuellerHistorieSqlText
+    {
+      get
+      {
+        if (AusgewaehltesSql == null) return string.Empty;
+        return IstSqlHistorieFormatiert ? _sqlHistorieFormatiert : AusgewaehltesSql.SQL_FULLTEXT ?? string.Empty;
+      }
+    }
+
+    public string FilterTextSql
+    {
+      get => _filterTextSql;
+      set { SetVal(ref _filterTextSql, value); SqlVerlaufAnsicht.Refresh(); }
+    }
+
+    public ICommand SqlAktualisierenBefehl { get; }
+    public ICommand KopiereHistorieSqlBefehl { get; }
+
+    private void SqlAktualisierenAusfuehren()
+    {
+      StatusSql = "Wird geladen...";
+
+      System.Threading.Tasks.Task.Run(() =>
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        var data = dbQuery?.GetAllSqlList() ?? new System.Collections.Generic.List<V_SQL>();
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          CollectionAktualisieren(SqlVerlauf, data);
+          SqlVerlaufAnsicht.Refresh();
+          StatusSql = $"Geladen: {data.Count} SQL-Einträge | {DateTime.Now:HH:mm:ss}";
+        });
+      });
+    }
+
+    private void KopiereHistorieSqlAusfuehren()
+    {
+      if (!string.IsNullOrEmpty(AktuellerHistorieSqlText))
+        Clipboard.SetText(AktuellerHistorieSqlText);
+    }
+
+    private bool FilterSqlDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(FilterTextSql)) return true;
+      if (obj is V_SQL s)
+      {
+        string filter = FilterTextSql.ToUpper();
+        bool idMatches = s.SQL_ID?.ToUpper().Contains(filter) ?? false;
+        bool sqlMatches = s.SQL_FULLTEXT?.ToUpper().Contains(filter) ?? false;
+        return idMatches || sqlMatches;
+      }
+      return false;
+    }
+
+    private void AktualisiereHistorieSqlAnsicht()
+    {
+      if (_ausgewaehltesSql == null)
+      {
+        _sqlHistorieFormatiert = string.Empty;
+      }
+      else
+      {
+        string rawSql = _ausgewaehltesSql.SQL_FULLTEXT ?? string.Empty;
+        int index = rawSql.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase);
+        _sqlHistorieFormatiert = (index > 0) ? rawSql.Substring(index).Trim() : rawSql;
+      }
+      OnPropertyChanged(nameof(AktuellerHistorieSqlText));
+    }
+  }
+}

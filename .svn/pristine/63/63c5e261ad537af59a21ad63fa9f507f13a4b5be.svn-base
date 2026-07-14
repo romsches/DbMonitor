@@ -1,0 +1,606 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.BL.Login;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.DbMonitorWPF.Views;
+using Bsd.WPFObjects;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Events;
+using Bsd.WPFObjects.Helper.Tasks;
+using Bsd.WPFObjects.Views;
+using DbMonitorWPF.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  /// <summary>
+  /// Haupt-ViewModel des Oracle Database Monitors.
+  ///
+  /// Verantwortlichkeiten:
+  ///   – Datenabruf und Verwaltung aller UI-Collections
+  ///     (SitzungenVm.Sitzungen, SQL-Verlauf, Prozesse, Sperren, Jobs)
+  ///   – Automatische Hintergrundaktualisierung im 30-Sekunden-Zyklus
+  ///   – Pausierung der Aktualisierung bei aktiver Benutzerauswahl (T-07)
+  ///   – Filterlogik für alle Tabs vollständig im ViewModel (kein Code-Behind)
+  ///   – Session/Sperre beenden: Bestätigungsdialog, CanExecute, sofortiges Entfernen
+  ///   – Dashboard-Navigation per Command
+  ///   – SQL in Zwischenablage kopieren (T-06)
+  ///   – Kontext-sensitive Statuszeile (T-07)
+  ///   – Farbliches Highlighting von Systembenutzern via BenutzerFarbe-Lookup (T-03)
+  /// </summary>
+  public class MainViewModel : DiViewModel
+  {
+    #region Felder
+    public AuditLogViewModel AuditLogVm { get; private set; }
+    public DashboardViewModel DashboardVm { get; }
+    public SitzungenViewModel SitzungenVm { get; }
+    public JobsViewModel JobsVm { get; }
+    public SperrenViewModel SperrenVm { get; }
+    private System.Timers.Timer _aktualisierungsTimer;
+    private readonly ILogger<MainViewModel> _log;
+
+    // --- Texteingaben ---
+    private string _benutzer = string.Empty;
+    private string _sqlInhalt = string.Empty;
+    private string _sidEingabe = string.Empty;
+    private string _serialEingabe = string.Empty;
+
+    // --- Filtertexte für alle Tabs (T-04) ---
+    private string _filterTextSitzungen = string.Empty;
+
+    // --- Statuszeilen ---
+    private string _statusSitzungen = string.Empty;
+    private string _statusSql = string.Empty;
+    private string _globalerStatusText = string.Empty;
+
+
+    // --- Hilfszustand ---
+    private int _aktiverTabIndex;
+    private DateTime _letzteAktualisierung;
+
+    // --- Lookup-Tabelle für farbliches Highlighting von Systembenutzern (T-03) ---
+    // Schlüssel: Benutzername (Großbuchstaben), Wert: WPF-Farbname
+    private static readonly Dictionary<string, string> SystemBenutzerFarben =
+      new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+      {
+        { "SYSDRK",  "#FFF3E0" },   // Hellorange
+        { "SYSADM",  "#E3F2FD" },   // Hellblau
+        { "SYSMON",  "#E8F5E9" },   // Hellgrün
+      };
+
+    #endregion
+
+    #region Konstruktor
+    public MainViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<MainViewModel> log, AuditLogViewModel auditLogVm)
+    : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+      this.AuditLogVm = auditLogVm;
+
+      // 1. Инициализируем ViewModel через DI (это правильный способ)
+      SitzungenVm = serviceProvider.GetRequiredService<SitzungenViewModel>();
+      ProzesseVm = serviceProvider.GetRequiredService<ProzesseViewModel>();
+      JobsVm = serviceProvider.GetRequiredService<JobsViewModel>();
+      SqlHistorieVm = serviceProvider.GetRequiredService<SqlhistorieViewModel>();
+      SperrenVm = serviceProvider.GetRequiredService<SperrenViewModel>();
+      this.DashboardVm = new DashboardViewModel(this, ServiceProvider, OraProvider, serviceProvider.GetRequiredService<ILogger<DashboardViewModel>>());
+      this.DashboardVm.Refresh();
+
+      // 3. Команды
+      LadeSqlBefehl = new DelegateCommand(LadeSqlAusfuehren);
+      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
+      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
+
+      // УДАЛИ строчку: ProzesseVm = new ProzesseViewModel(serviceProvider, oraProvider, log); 
+      // Она вызывает конфликт и ошибку типов логгера!
+
+      SitzungenAktualisierenBefehl = new DelegateCommand(() => SitzungenVm.SitzungenAktualisierenBefehl.Execute(null));
+      ProzesseAktualisierenBefehl = new DelegateCommand(() => ProzesseVm.ProzesseAktualisierenBefehl.Execute(null));
+      SperrenAktualisierenBefehl = new DelegateCommand(() => SperrenVm.SperrenAktualisierenBefehl.Execute(null));
+
+      // 4. Navigation... (остальной код такой же)
+      WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
+      WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
+      WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
+      WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
+      WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
+
+      LoadedBefehl = new DelegateCommand(OnLoaded);
+      UnloadedBefehl = new DelegateCommand(OnUnloaded);
+
+      _aktualisierungsTimer = new System.Timers.Timer(30000); // 30 Sekunden
+      _aktualisierungsTimer.Elapsed += (s, e) => HintergrundAktualisierungTimer();
+      _aktualisierungsTimer.AutoReset = true;
+      _aktualisierungsTimer.Start();
+    }
+    #endregion
+
+    #region Befehle
+
+    /// <summary>Lädt den SQL-Text für eine manuell eingegebene SID/Serial-Nummer.</summary>
+    public ICommand LadeSqlBefehl { get; private set; }
+
+    /// <summary>Lädt die Top 20 SQL-Statements nach Ausführungsanzahl und navigiert zum SQL-Tab.</summary>
+    public ICommand LadeTopSqlBefehl { get; private set; }
+
+    /// <summary>Lädt die Top 20 Prozesse nach PGA-Speicher und navigiert zum Prozesse-Tab.</summary>
+    public ICommand LadeTopProzesseBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die SitzungenVm.Sitzungen-Tabelle manuell.</summary>
+    public ICommand SitzungenAktualisierenBefehl { get; private set; }
+
+
+    /// <summary>Aktualisiert die Prozesse-Tabelle manuell.</summary>
+    public ICommand ProzesseAktualisierenBefehl { get; private set; }
+
+    /// <summary>Beendet die ausgewählte Session (mit Bestätigung). Nur aktiv wenn Zeile gewählt (T-13).</summary>
+    public ICommand SitzungBeendenBefehl { get; private set; }
+
+    /// <summary>Beendet die Session hinter der Sperre (mit Bestätigung). Nur aktiv wenn Zeile gewählt (T-13).</summary>
+    public ICommand SperreBeendenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Sperren-Tabelle manuell.</summary>
+    public ICommand SperrenAktualisierenBefehl { get; private set; }
+
+    /// <summary>Aktualisiert die Jobs-Tabelle manuell.</summary>
+    public ICommand JobsAktualisierenBefehl { get; private set; }
+
+    /// <summary>Kopiert den SQL-Text der ausgewählten Zeile in die Zwischenablage (T-06).</summary>
+    public ICommand SqlKopierenBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum SitzungenVm.Sitzungen-Tab.</summary>
+    public ICommand WechsleZuSitzungenBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum SQL-Tab.</summary>
+    public ICommand WechsleZuSqlBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Prozesse-Tab.</summary>
+    public ICommand WechsleZuProzesseBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Jobs-Tab.</summary>
+    public ICommand WechsleZuJobsBefehl { get; private set; }
+
+    /// <summary>Navigiert direkt zum Sperren-Tab.</summary>
+    public ICommand WechsleZuSperrenBefehl { get; private set; }
+
+    /// <summary>Wird beim Laden der View ausgeführt (über Behavior gebunden).</summary>
+    public ICommand LoadedBefehl { get; private set; }
+
+    /// <summary>Wird beim Entladen der View ausgeführt (über Behavior gebunden).</summary>
+    public ICommand UnloadedBefehl { get; private set; }
+    public DelegateCommand KopiereSitzungsSqlBefehl { get; private set; }
+    public SqlhistorieViewModel SqlHistorieVm { get; }
+    public ProzesseViewModel ProzesseVm { get; }
+
+    #endregion
+
+    #region Eigenschaften – Eingabe und Status
+
+    /// <summary>Anzeigename des angemeldeten Benutzers.</summary>
+    public string Benutzer
+    {
+      get => _benutzer;
+      set => SetVal(ref _benutzer, value);
+    }
+
+    /// <summary>SQL-Text im AvalonEdit-Editor des Dashboards (manueller Abruf).</summary>
+    public string SqlInhalt
+    {
+      get => _sqlInhalt;
+      set => SetVal(ref _sqlInhalt, value);
+    }
+
+    /// <summary>Manuelle Eingabe der Session-ID für den SQL-Abruf.</summary>
+    public string SidEingabe
+    {
+      get => _sidEingabe;
+      set => SetVal(ref _sidEingabe, value);
+    }
+
+    /// <summary>Manuelle Eingabe der Seriennummer für den SQL-Abruf.</summary>
+    public string SerialEingabe
+    {
+      get => _serialEingabe;
+      set => SetVal(ref _serialEingabe, value);
+    }
+
+    /// <summary>Aktiver Tab-Index für Dashboard-Navigation (T-02/T-03).</summary>
+    public int AktiverTabIndex
+    {
+      get => _aktiverTabIndex;
+      set
+      {
+        SetVal(ref _aktiverTabIndex, value);
+        // T-07: Statuszeile unten bei Tab-Wechsel aktualisieren
+        GlobalenStatusTextAktualisieren();
+      }
+    }
+
+    /// <summary>
+    /// Kontext-sensitiver Statustext für die globale Statuszeile unten.
+    /// Zeigt je nach aktivem Tab den passenden Statustext an (T-07).
+    /// Bei aktiver Auswahl erscheint ein Hinweis zur pausierten Aktualisierung.
+    /// </summary>
+    public string GlobalerStatusText
+    {
+      get => _globalerStatusText;
+      set => SetVal(ref _globalerStatusText, value);
+    }
+
+    // --- Statuszeilen der einzelnen Tabs ---
+
+    /// <summary>Statuszeile des SitzungenVm.Sitzungen-Tabs mit Anzahl und Uhrzeit.</summary>
+    public string StatusSitzungen
+    {
+      get => _statusSitzungen;
+      set { SetVal(ref _statusSitzungen, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des SQL-Tabs.</summary>
+    public string StatusSql
+    {
+      get => _statusSql;
+      set { SetVal(ref _statusSql, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>Statuszeile des Prozesse-Tabs.</summary>
+    public string StatusProzesse
+    {
+      get => ProzesseVm.StatusProzesse;
+      set { ProzesseVm.StatusProzesse = value; GlobalenStatusTextAktualisieren(); }
+    }
+
+
+    #endregion
+       
+    #region Eigenschaften – Ausgewählte Objekte
+
+
+
+    private bool _istSqlFormatiert;
+    private string _ausgewaehlteSitzungSqlFormatiert;
+
+    private bool _istSqlHistorieFormatiert;
+    private string _sqlHistorieFormatiert;
+
+    #endregion
+
+    #region Eigenschaften – Highlighting (T-03)
+    /// <summary>
+    /// Gibt die Hintergrundfarbe für einen Benutzernamen zurück (für DataGrid-RowStyle).
+    /// Wird über MultiBinding oder Converter im XAML genutzt.
+    /// </summary>
+    public static string GetBenutzerFarbe(string benutzername)
+    {
+      if (string.IsNullOrEmpty(benutzername)) return "Transparent";
+      string farbe;
+      return SystemBenutzerFarben.TryGetValue(benutzername, out farbe) ? farbe : "Transparent";
+    }
+
+    #endregion
+
+    #region Eigenschaften – Status & Filter (Weiterleitung an ProzesseVm)
+
+
+    public string FilterTextProzesse
+    {
+      get => ProzesseVm.FilterTextProzesse;
+      set
+      {
+        if (ProzesseVm.FilterTextProzesse == value) return;
+        ProzesseVm.FilterTextProzesse = value;
+        OnPropertyChanged(nameof(FilterTextProzesse));
+      }
+    }
+
+    // Falls du irgendwo noch auf die Ansicht zugreifen musst:
+    public ICollectionView ProzesseAnsicht => ProzesseVm.ProzesseAnsicht;
+
+    #endregion
+
+    #region Öffentliche Methoden
+
+    public void AktualisiereDashboard()
+    {
+      DashboardVm?.Refresh();
+    }
+    #endregion
+
+    #region Private Methoden – Initialisierung und Lifecycle
+
+    /// <summary>
+    /// Reagiert auf das Login-Event: Benutzernamen setzen und alle Daten initial laden.
+    /// </summary>
+    private void OnBenutzerAngemeldet(UserLoginEvent ev)
+    {
+      var anmeldeDaten = ServiceProvider.GetService<LoginData>();
+      BsdApplication.InvokeIfRequired(() =>
+        Benutzer = string.Format("Guten Tag, {0}",
+          anmeldeDaten != null ? anmeldeDaten.IntervenantText : string.Empty));
+
+      SitzungenAktualisierenAusfuehren();
+      SqlHistorieVm.SqlAktualisierenBefehl.Execute(null);
+
+      // ÄNDERUNG HIER:
+      // Wir rufen jetzt das Command im neuen ViewModel auf
+      ProzesseVm.ProzesseAktualisierenBefehl.Execute(null);
+
+      SperrenVm.SperrenAktualisierenBefehl.Execute(null);
+      JobsAktualisierenBefehl.Execute(null);
+    }
+
+    /// <summary>Wird beim Laden der View aufgerufen.</summary>
+    private void OnLoaded()
+    {
+      _log.LogInformation("OnLoaded: MainView wurde erfolgreich geladen.");
+      GlobalenStatusTextAktualisieren();
+
+      SitzungenAktualisierenAusfuehren();
+      SperrenVm.SperrenAktualisierenBefehl.Execute(null);
+    }
+
+    /// <summary>Wird beim Entladen der View aufgerufen – stoppt das Monitoring sauber.</summary>
+    private void OnUnloaded()
+    {
+      _aktualisierungsTimer?.Stop();
+      _aktualisierungsTimer?.Dispose();
+      _log.LogInformation("MainView entladen: Timer gestoppt.");
+    }
+
+    #endregion
+
+    #region Private Methoden – Daten aktualisieren
+
+    /// <summary>Lädt alle aktiven SitzungenVm.Sitzungen und aktualisiert Collection und Statuszeile.</summary>
+    private void SitzungenAktualisierenAusfuehren()
+    {
+      AuswahlAufheben();
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("SitzungenAktualisieren: DbQuery nicht verfügbar."); return; }
+
+      var liste = dbQuery.GetAktuelleSessionsList();
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        CollectionAktualisieren(SitzungenVm.Sitzungen, liste);
+        SitzungenVm?.SitzungenAnsicht?.Refresh();
+        _letzteAktualisierung = DateTime.Now;
+      StatusSitzungen = StatusHelper.FormatStatus(liste.Count, "Sitzungen");
+        DashboardVm?.Refresh();
+      });
+    }
+
+    /// <summary>
+    /// Analyse-Modus: Top 20 SQL nach Ausführungsanzahl laden und zum SQL-Tab navigieren.
+    /// Der Modus wird dabei direkt im SqlHistorieVm gesetzt.
+    /// </summary>
+    private void LadeTopSqlAusfuehren()
+    {
+      // 1. Фильтр сбрасываем напрямую
+      SqlHistorieVm.FilterTextSql = string.Empty;
+
+      // 2. ВАЖНО: Устанавливаем режим Top 20 через специально созданный публичный метод
+      SqlHistorieVm.SetTop20Mode(true);
+
+      // 3. Выполняем команду (это запускает приватный метод LadeTopSqlAusfuehren внутри SqlhistorieViewModel)
+      if (SqlHistorieVm.LadeTopSqlBefehl.CanExecute(null))
+      {
+        SqlHistorieVm.LadeTopSqlBefehl.Execute(null);
+      }
+
+      // 4. Переключаем вкладку
+      AktiverTabIndex = 2;
+    }
+    /// <summary>
+    /// Analyse-Modus: Top 20 Prozesse nach PGA-Speicher laden und zum Prozesse-Tab navigieren.
+    /// Filter wird dabei automatisch zurückgesetzt.
+    /// </summary>
+    private void LadeTopProzesseAusfuehren()
+    {
+      // 1. Erst Prozesse laden
+      ProzesseVm.LadeTopProzesseAusfuehren();
+
+      // 2. Dann zum Tab navigieren (Index 3 war Prozesse)
+      AktiverTabIndex = 3;
+    }
+
+    /// <summary>Lädt SQL-Text für manuell eingegebene SID/Serial (Dashboard-Eingabe).</summary>
+    private void LadeSqlAusfuehren()
+    {
+      decimal sid, serial;
+      if (!decimal.TryParse(SidEingabe, out sid) || !decimal.TryParse(SerialEingabe, out serial))
+      {
+        SqlInhalt = "Ungültige Eingabe: Bitte gültige SID und Serial-Nummer eingeben.";
+        _log.LogWarning("LadeSql: Abbruch – ungültige Eingabewerte.");
+        return;
+      }
+
+      var dbQuery = ServiceProvider.GetService<DbQuery>();
+      if (dbQuery == null) { _log.LogError("LadeSql: DbQuery nicht verfügbar."); return; }
+
+      var ergebnis = dbQuery.GetCurrentSqlText(sid, serial);
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        SqlInhalt = string.IsNullOrEmpty(ergebnis.Item2)
+          ? ergebnis.Item1
+          : ergebnis.Item1 + "\n\n-- Bind-Variablen:\n" + ergebnis.Item2;
+      });
+    }
+
+
+    #endregion
+
+    #region Private Methoden – Filter-Delegates (T-04)
+
+    /// <summary>
+    /// Filter-Delegate für den SitzungenVm.Sitzungen-Tab.
+    /// Berücksichtigt: USERNAME, OSUSER, MACHINE, TERMINAL, PROGRAM,
+    ///                 STATUS, TYPE, SID, SERIAL, PROCESS_ID, LOGON_TIME.
+    /// </summary>
+    private bool FilterSitzungenDelegate(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(_filterTextSitzungen)) return true;
+      var s = obj as V_SESSION_MONITOR;
+      if (s == null) return false;
+      string f = _filterTextSitzungen.Trim();
+
+      return Enthaelt(s.USERNAME, f) || Enthaelt(s.OSUSER, f) || Enthaelt(s.MACHINE, f) ||
+             Enthaelt(s.TERMINAL, f) || Enthaelt(s.PROGRAM, f) || Enthaelt(s.STATUS, f) ||
+             Enthaelt(s.TYPE, f) || Enthaelt(s.PROCESS_ID, f) || Enthaelt(s.SID?.ToString(), f) ||
+             Enthaelt(s.SERIAL?.ToString(), f) ||
+             Enthaelt(s.LOGON_TIME?.ToString("dd.MM.yyyy HH:mm"), f);
+    }
+
+    #endregion
+
+    #region Private Methoden – Status (T-07)
+
+    /// <summary>
+    /// Aktualisiert die globale Statuszeile unten kontext-sensitiv (T-07).
+    ///
+    /// Logik:
+    ///   – Wenn eine Zeile ausgewählt ist: Hinweis auf pausierte Aktualisierung
+    ///   – Sonst: Statustext des aktiven Tabs oder "Automatische Aktualisierung alle 30 Sekunden"
+    /// </summary>
+    private void GlobalenStatusTextAktualisieren()
+    {
+      string status;
+      switch (_aktiverTabIndex)
+      {
+        case 1: status = _statusSitzungen; break;
+        case 2: status = SqlHistorieVm?.StatusSql; break;
+        case 3: status = ProzesseVm?.StatusProzesse; break;
+        case 4: status = JobsVm?.StatusJobs; break;
+        case 5: status = SperrenVm?.StatusSperren; break;
+
+        // ДОБАВЛЯЕМ AuditLog сюда:
+        case 6: status = AuditLogVm?.Status; break;
+
+        default: status = null; break;
+      }
+
+      // Теперь GlobalerStatusText будет брать статус прямо из AuditLogViewModel.Status
+      GlobalerStatusText = string.IsNullOrEmpty(status) ? "Bereit" : status;
+    }
+    #endregion
+
+    #region Private Hilfsmethoden
+
+    /// <summary>
+    /// Ersetzt den Inhalt einer ObservableCollection ohne neue Referenz.
+    /// Erhält bestehende UI-Bindings und CollectionView-Konfigurationen.
+    /// </summary>
+    private static void CollectionAktualisieren<T>(ObservableCollection<T> collection, List<T> neueDaten)
+    {
+      if (collection == null) return; // Просто выходим, если коллекции нет
+      if (neueDaten == null) return;  // И если данных нет
+
+      collection.Clear();
+      foreach (var eintrag in neueDaten)
+      {
+        collection.Add(eintrag);
+      }
+    }
+
+    /// <summary>
+    /// Prüft ob ein Text einen Suchbegriff enthält (Groß-/Kleinschreibung ignoriert).
+    /// Gibt false zurück wenn der Text null ist.
+    /// C# 7.3 kompatibel (kein String.Contains mit StringComparison-Overload).
+    /// </summary>
+    private static bool Enthaelt(string text, string suchbegriff)
+    {
+      if (text == null || suchbegriff == null) return false;
+      return text.IndexOf(suchbegriff, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private void AuswahlAufheben()
+    {
+      SitzungenVm.AusgewaehlteSitzung = null;
+      SperrenVm.AusgewaehlteSperre = null;
+      ProzesseVm.AusgewaehlterProzess = null;
+
+      if (JobsVm != null) JobsVm.AusgewaehlterJob = null;
+
+      if (SqlHistorieVm != null)
+      {
+        SqlHistorieVm.AusgewaehltesSql = null;
+        SqlHistorieVm.StatusSql = "Auswahl aufgehoben.";
+      }
+
+      GlobalenStatusTextAktualisieren();
+    }
+
+    private void HintergrundAktualisierungTimer()
+    {
+      try
+      {
+        var dbQuery = ServiceProvider.GetService<DbQuery>();
+        if (dbQuery == null) return;
+
+        // --- Logik für Prozesse ---
+        var prozesse = ProzesseVm.IstTop20Modus
+                       ? dbQuery.GetTopMemoryProcessesList()
+                       : dbQuery.GetAllProcessesList();
+
+        // --- Logik für SQL ---
+        var sqlDaten = SqlHistorieVm.IstTop20Modus
+                       ? dbQuery.GetTopExecutedSqlList()
+                       : dbQuery.GetAllSqlList();
+
+        // Standard-Daten
+        var sitzungen = dbQuery.GetAktuelleSessionsList();
+        var sperren = dbQuery.GetLockList();
+        var jobs = dbQuery.GetAuffaelligeJobList();
+        var auditLogs = dbQuery.GetAuditLogEntries();
+
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          // Update Sitzungen
+          CollectionAktualisieren(SitzungenVm?.Sitzungen, sitzungen);
+          SitzungenVm?.SitzungenAnsicht?.Refresh();
+          StatusSitzungen = StatusHelper.FormatStatus(sitzungen.Count, "Sitzungen");
+
+          // Update Prozesse (mit korrektem Modus)
+          CollectionAktualisieren(ProzesseVm.Prozesse, prozesse);
+          ProzesseVm.ProzesseAnsicht?.Refresh();
+          ProzesseVm.StatusProzesse = StatusHelper.FormatStatus(prozesse.Count, ProzesseVm.IstTop20Modus ? "Top-Prozesse" : "Prozesse");
+
+          // Update SQL (mit korrektem Modus)
+          CollectionAktualisieren(SqlHistorieVm.SqlVerlauf, sqlDaten);
+          SqlHistorieVm.SqlVerlaufAnsicht?.Refresh();
+          SqlHistorieVm.StatusSql = StatusHelper.FormatStatus(sqlDaten.Count, SqlHistorieVm.IstTop20Modus ? "Top 20 SQL" : "SQL-Einträge");
+
+          // ... Rest (Sperren, Jobs, Audit) bleibt wie gehabt ...
+          CollectionAktualisieren(SperrenVm.Sperren, sperren);
+          SperrenVm.SperrenAnsicht?.Refresh();
+          SperrenVm.StatusSperren = StatusHelper.FormatStatus(sperren.Count, "aktive Sperren");
+
+          CollectionAktualisieren(JobsVm.AuffaelligeJobs, jobs);
+          JobsVm.StatusJobs = StatusHelper.FormatStatus(jobs.Count, "Jobs");
+
+          CollectionAktualisieren(AuditLogVm.AuditEntries, auditLogs);
+          AuditLogVm.AuditLogAnsicht?.Refresh();
+          AuditLogVm.Status = StatusHelper.FormatStatus(auditLogs.Count, "Audit Logs");
+
+          DashboardVm?.Refresh();
+          if (_aktiverTabIndex == 6) GlobalenStatusTextAktualisieren();
+        });
+      }
+      catch (Exception ex)
+      {
+        _log.LogError(ex, "Fehler im Timer-Zyklus.");
+      }
+    }
+    #endregion
+  }
+}

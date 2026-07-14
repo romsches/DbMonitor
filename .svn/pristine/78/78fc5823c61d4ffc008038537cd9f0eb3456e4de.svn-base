@@ -1,0 +1,380 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Windows.Input;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  /// <summary>
+  /// Haupt-ViewModel des Oracle Database Monitors.
+  ///
+  /// Verantwortlichkeiten:
+  ///   – Koordination der Tab-ViewModels über Dependency Injection
+  ///   – Navigation zwischen den Tabs per Command
+  ///   – Hintergrundaktualisierung aller Tabs im 30-Sekunden-Zyklus
+  ///   – Kontext-sensitive globale Statuszeile
+  ///   – Dashboard-Analyse-Funktionen (Top 20 SQL, Top 20 Prozesse, SQL per SID)
+  ///
+  /// Datenzugriffs- und Filterlogik verbleibt ausschließlich in den jeweiligen Tab-ViewModels.
+  /// </summary>
+  public class MainViewModel : DiViewModel
+  {
+    #region Felder
+
+    private readonly ILogger<MainViewModel> _log;
+    private System.Timers.Timer _aktualisierungsTimer;
+    private int _aktiverTabIndex;
+    private string _globalerStatusText = string.Empty;
+    private string _sidEingabe = string.Empty;
+    private string _serialEingabe = string.Empty;
+    private string _sqlInhalt = string.Empty;
+
+    #endregion
+
+    #region Konstruktor
+
+    /// <summary>
+    /// Initialisiert das MainViewModel, löst alle Tab-ViewModels per DI auf
+    /// und richtet Navigations-, Analyse- und Lifecycle-Befehle ein.
+    /// </summary>
+    public MainViewModel(
+        IServiceProvider serviceProvider,
+        IOraProvider oraProvider,
+        ILogger<MainViewModel> log,
+        AuditLogViewModel auditLogVm)
+        : base(serviceProvider, oraProvider, log)
+    {
+      _log = log;
+
+      // --- Tab-ViewModels per DI auflösen ---
+      AuditLogVm = auditLogVm;
+      SitzungenVm = serviceProvider.GetRequiredService<SitzungenViewModel>();
+      ProzesseVm = serviceProvider.GetRequiredService<ProzesseViewModel>();
+      JobsVm = serviceProvider.GetRequiredService<JobsViewModel>();
+      SqlHistorieVm = serviceProvider.GetRequiredService<SqlhistorieViewModel>();
+      SperrenVm = serviceProvider.GetRequiredService<SperrenViewModel>();
+      DashboardVm = new DashboardViewModel(
+          this, serviceProvider, oraProvider,
+          serviceProvider.GetRequiredService<ILogger<DashboardViewModel>>());
+
+      SitzungenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SitzungenVm.StatusSitzungen)) GlobalenStatusTextAktualisieren(); };
+      SqlHistorieVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SqlHistorieVm.StatusSql)) GlobalenStatusTextAktualisieren(); };
+      ProzesseVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ProzesseVm.StatusProzesse)) GlobalenStatusTextAktualisieren(); };
+      JobsVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(JobsVm.StatusJobs)) GlobalenStatusTextAktualisieren(); };
+      SperrenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SperrenVm.StatusSperren)) GlobalenStatusTextAktualisieren(); };
+      AuditLogVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(AuditLogVm.Status)) GlobalenStatusTextAktualisieren(); };
+
+      // --- Navigations-Befehle ---
+      WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
+      WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
+      WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
+      WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
+      WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
+
+      // --- Dashboard-Analyse-Befehle ---
+      LadeSqlBefehl = new DelegateCommand(LadeSqlAusfuehren);
+      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
+      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
+
+      // --- Lifecycle-Befehle ---
+      LoadedBefehl = new DelegateCommand(OnLoaded);
+      UnloadedBefehl = new DelegateCommand(OnUnloaded);
+
+      // --- Hintergrund-Timer (Intervall: 30 Sekunden) ---
+      _aktualisierungsTimer = new System.Timers.Timer(30_000);
+      _aktualisierungsTimer.Elapsed += (_, __) => TimerZyklusAusfuehren();
+      _aktualisierungsTimer.AutoReset = true;
+
+    }
+
+
+    #endregion
+
+    #region Tab-ViewModels
+
+    /// <summary>ViewModel der Audit-Log-Ansicht.</summary>
+    public AuditLogViewModel AuditLogVm { get; }
+
+    /// <summary>ViewModel des Dashboards.</summary>
+    public DashboardViewModel DashboardVm { get; }
+
+    /// <summary>ViewModel der Sitzungs-Ansicht (V$SESSION).</summary>
+    public SitzungenViewModel SitzungenVm { get; }
+
+    /// <summary>ViewModel der Prozess-Ansicht (V$PROCESS).</summary>
+    public ProzesseViewModel ProzesseVm { get; }
+
+    /// <summary>ViewModel der Job-Ansicht (DBA_SCHEDULER_JOBS).</summary>
+    public JobsViewModel JobsVm { get; }
+
+    /// <summary>ViewModel der SQL-Verlauf-Ansicht (V$SQL).</summary>
+    public SqlhistorieViewModel SqlHistorieVm { get; }
+
+    /// <summary>ViewModel der Sperren-Ansicht (V$LOCK).</summary>
+    public SperrenViewModel SperrenVm { get; }
+
+    #endregion
+
+    #region Befehle
+
+    /// <summary>Navigiert zum Tab "Sitzungen".</summary>
+    public ICommand WechsleZuSitzungenBefehl { get; }
+
+    /// <summary>Navigiert zum Tab "SQL-Historie".</summary>
+    public ICommand WechsleZuSqlBefehl { get; }
+
+    /// <summary>Navigiert zum Tab "Prozesse".</summary>
+    public ICommand WechsleZuProzesseBefehl { get; }
+
+    /// <summary>Navigiert zum Tab "Datenbank-Jobs".</summary>
+    public ICommand WechsleZuJobsBefehl { get; }
+
+    /// <summary>Navigiert zum Tab "Sperren".</summary>
+    public ICommand WechsleZuSperrenBefehl { get; }
+
+    /// <summary>Lädt SQL-Text für die manuell eingegebene SID/Serial-Kombination.</summary>
+    public ICommand LadeSqlBefehl { get; }
+
+    /// <summary>Lädt die Top 20 SQL-Statements und navigiert zur SQL-Historie.</summary>
+    public ICommand LadeTopSqlBefehl { get; }
+
+    /// <summary>Lädt die Top 20 Prozesse und navigiert zur Prozess-Ansicht.</summary>
+    public ICommand LadeTopProzesseBefehl { get; }
+
+    /// <summary>Wird beim Laden der Hauptansicht ausgelöst.</summary>
+    public ICommand LoadedBefehl { get; }
+
+    /// <summary>Wird beim Entladen der Hauptansicht ausgelöst.</summary>
+    public ICommand UnloadedBefehl { get; }
+
+    #endregion
+
+    #region Eigenschaften – Navigation & Status
+
+    /// <summary>
+    /// Index des aktuell aktiven Tabs (0 = Dashboard, 1 = Sitzungen, ..., 6 = Audit-Log).
+    /// Bei Änderung wird die globale Statuszeile aktualisiert.
+    /// </summary>
+    public int AktiverTabIndex
+    {
+      get => _aktiverTabIndex;
+      set { SetVal(ref _aktiverTabIndex, value); GlobalenStatusTextAktualisieren(); }
+    }
+
+    /// <summary>
+    /// Kontext-sensitiver Statustext der globalen Statuszeile.
+    /// Zeigt je nach aktivem Tab den passenden Statustext des jeweiligen Tab-ViewModels.
+    /// </summary>
+    public string GlobalerStatusText
+    {
+      get => _globalerStatusText;
+      set => SetVal(ref _globalerStatusText, value);
+    }
+
+    #endregion
+
+    #region Eigenschaften – Dashboard (manuelle SQL-Abfrage)
+
+    /// <summary>Manuell eingegebene Session-ID für den SQL-Abruf über das Dashboard.</summary>
+    public string SidEingabe
+    {
+      get => _sidEingabe;
+      set => SetVal(ref _sidEingabe, value);
+    }
+
+    /// <summary>Manuell eingegebene Seriennummer für den SQL-Abruf über das Dashboard.</summary>
+    public string SerialEingabe
+    {
+      get => _serialEingabe;
+      set => SetVal(ref _serialEingabe, value);
+    }
+
+    /// <summary>Ergebnis-SQL-Text der manuellen Dashboard-Abfrage.</summary>
+    public string SqlInhalt
+    {
+      get => _sqlInhalt;
+      set => SetVal(ref _sqlInhalt, value);
+    }
+
+    #endregion
+
+    #region Private Methoden – Lifecycle
+
+    /// <summary>
+    /// Wird beim Laden der Hauptansicht aufgerufen.
+    /// Startet den initialen Datenabruf und den Hintergrund-Timer.
+    /// </summary>
+    private void OnLoaded()
+    {
+      _log.LogInformation("MainView geladen – initialer Datenabruf gestartet.");
+      AlleTabsAktualisieren();
+      _aktualisierungsTimer.Start();
+      GlobalenStatusTextAktualisieren();
+    }
+
+    /// <summary>
+    /// Wird beim Entladen der Hauptansicht aufgerufen.
+    /// Stoppt und gibt den Hintergrund-Timer frei.
+    /// </summary>
+    private void OnUnloaded()
+    {
+      _aktualisierungsTimer.Stop();
+      _aktualisierungsTimer.Dispose();
+      _log.LogInformation("MainView entladen – Timer gestoppt.");
+    }
+
+    #endregion
+
+    #region Private Methoden – Datenaktualisierung
+
+    /// <summary>
+    /// Löst den initialen Datenabruf für alle Tabs aus.
+    /// SQL-Historie wird nur geladen, wenn noch kein Top-20-Modus aktiv ist,
+    /// um eine Race Condition beim sofortigen Klick auf "Top 20 SQL" zu verhindern.
+    /// </summary>
+    private void AlleTabsAktualisieren()
+    {
+      SitzungenVm.SitzungenAktualisierenBefehl.Execute(null);
+      ProzesseVm.ProzesseAktualisierenBefehl.Execute(null);
+      SperrenVm.SperrenAktualisierenBefehl.Execute(null);
+      JobsVm.JobsAktualisierenBefehl.Execute(null);
+      AuditLogVm.RefreshCommand.Execute(null);
+
+      if (!SqlHistorieVm.IstTop20Modus)
+        SqlHistorieVm.SqlAktualisierenBefehl.Execute(null);
+
+      DashboardVm.Refresh();
+    }
+
+    /// <summary>
+    /// Hintergrund-Timer-Zyklus (alle 30 Sekunden).
+    /// Ruft alle Rohdaten außerhalb des UI-Threads ab und übergibt sie
+    /// per AktualisierenIntern() an die jeweiligen Tab-ViewModels.
+    /// Der SQL- und Prozesse-Abruf berücksichtigt den jeweils aktiven Analyse-Modus.
+    /// </summary>
+    private void TimerZyklusAusfuehren()
+    {
+      try
+      {
+        var db = ServiceProvider.GetService<DbQuery>();
+        if (db == null) return;
+
+        // Datenabruf außerhalb des UI-Threads
+        var sitzungen = db.GetAktuelleSessionsList();
+        var sperren = db.GetLockList();
+        var jobs = db.GetAuffaelligeJobList();
+        var auditLogs = db.GetAuditLogEntries();
+
+        var prozesse = ProzesseVm.IstTop20Modus
+            ? db.GetTopMemoryProcessesList()
+            : db.GetAllProcessesList();
+
+        var sqlDaten = SqlHistorieVm.IstTop20Modus
+            ? db.GetTopExecutedSqlList()
+            : db.GetAllSqlList();
+
+        // Übergabe an UI-Thread
+        BsdApplication.InvokeIfRequired(() =>
+        {
+          SitzungenVm.AktualisierenIntern(sitzungen);
+          SperrenVm.AktualisierenIntern(sperren);
+          JobsVm.AktualisierenIntern(jobs);
+          AuditLogVm.AktualisierenIntern(auditLogs);
+          ProzesseVm.AktualisierenIntern(prozesse);
+          SqlHistorieVm.AktualisierenIntern(sqlDaten);
+          DashboardVm.Refresh();
+          GlobalenStatusTextAktualisieren();
+        });
+      }
+      catch (Exception ex)
+      {
+        _log.LogError(ex, "Fehler im Timer-Zyklus.");
+      }
+    }
+
+    #endregion
+
+    #region Private Methoden – Dashboard-Analyse
+
+    /// <summary>
+    /// Lädt den SQL-Text für die manuell eingegebene SID/Serial-Kombination
+    /// und zeigt das Ergebnis inkl. Bind-Variablen im Dashboard an.
+    /// </summary>
+    private void LadeSqlAusfuehren()
+    {
+      if (!decimal.TryParse(SidEingabe, out var sid) ||
+          !decimal.TryParse(SerialEingabe, out var serial))
+      {
+        SqlInhalt = "Ungültige Eingabe!";
+        return;
+      }
+
+      var db = ServiceProvider.GetService<DbQuery>();
+      var ergebnis = db?.GetCurrentSqlText(sid, serial);
+
+      if (ergebnis == null)
+      {
+        SqlInhalt = "Kein SQL gefunden.";
+        return;
+      }
+
+      SqlInhalt = string.IsNullOrEmpty(ergebnis.BindVariablen)
+          ? ergebnis.SqlText
+          : $"{ergebnis.SqlText}\n\n-- Bind-Variablen:\n{ergebnis.BindVariablen}";
+    }
+
+    /// <summary>
+    /// Setzt den Top-20-Modus für die SQL-Historie, lädt die Daten
+    /// und navigiert zur SQL-Verlauf-Ansicht.
+    /// </summary>
+    private void LadeTopSqlAusfuehren()
+    {
+      SqlHistorieVm.FilterTextSql = string.Empty;
+      SqlHistorieVm.SetTop20Mode(true);
+      SqlHistorieVm.LadeTopSqlBefehl.Execute(null);
+      AktiverTabIndex = 2;
+    }
+
+    /// <summary>
+    /// Lädt die Top 20 Prozesse nach PGA-Speicher und navigiert zur Prozess-Ansicht.
+    /// </summary>
+    private void LadeTopProzesseAusfuehren()
+    {
+      ProzesseVm.LadeTopProzesseAusfuehren();
+      AktiverTabIndex = 3;
+    }
+
+    #endregion
+
+    #region Private Methoden – Status
+
+    /// <summary>
+    /// Aktualisiert die globale Statuszeile kontext-sensitiv anhand des aktiven Tabs.
+    /// Greift direkt auf die StatusProperties der jeweiligen Tab-ViewModels zu.
+    /// </summary>
+    private void GlobalenStatusTextAktualisieren()
+    {
+      string status = null;
+      switch (_aktiverTabIndex)
+      {
+        case 1: status = SitzungenVm?.StatusSitzungen; break;
+        case 2: status = SqlHistorieVm?.StatusSql; break;
+        case 3: status = ProzesseVm?.StatusProzesse; break;
+        case 4: status = JobsVm?.StatusJobs; break;
+        case 5: status = SperrenVm?.StatusSperren; break;
+        case 6: status = AuditLogVm?.Status; break;
+      }
+
+      GlobalerStatusText = string.IsNullOrEmpty(status) ? "Bereit" : status;
+    }
+
+    #endregion
+  }
+}

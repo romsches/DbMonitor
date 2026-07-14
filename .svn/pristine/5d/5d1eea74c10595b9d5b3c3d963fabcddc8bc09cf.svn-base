@@ -1,0 +1,69 @@
+﻿using System;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+using ICSharpCode.AvalonEdit.Highlighting;
+using static SQL.Formatter.SqlFormatter;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  public partial class SperrenView : UserControl
+  {
+    public SperrenView()
+    {
+      InitializeComponent();
+      ApplySqlHighlighting(SqlEditorSperren);
+
+      this.Loaded += (s, e) => {
+        if (DataContext is SperrenViewModel vm)
+          vm.SperrenAktualisierenBefehl.Execute(null);
+      };
+
+      this.DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+      // Отписываемся от старого ViewModel
+      if (e.OldValue is SperrenViewModel oldVm)
+        oldVm.PropertyChanged -= Vm_PropertyChanged;
+
+      // Подписываемся на новый
+      if (e.NewValue is SperrenViewModel newVm)
+      {
+        newVm.PropertyChanged += Vm_PropertyChanged;
+        // Сразу обновляем текст при смене контекста
+        UpdateSqlEditor(SqlEditorSperren, newVm.AusgewaehlteSperreSql);
+      }
+    }
+
+    private void Vm_PropertyChanged(object sender, PropertyChangedEventArgs e)
+    {
+      if (sender is SperrenViewModel vm && e.PropertyName == nameof(SperrenViewModel.AusgewaehlteSperreSql))
+      {
+        UpdateSqlEditor(SqlEditorSperren, vm.AusgewaehlteSperreSql);
+      }
+    }
+
+    private void UpdateSqlEditor(ICSharpCode.AvalonEdit.TextEditor editor, string sqlText)
+    {
+      if (editor == null) return;
+
+      // Форматируем текст
+      editor.Text = string.IsNullOrWhiteSpace(sqlText) ? string.Empty : Format(sqlText);
+
+      // Если подсветка еще не установлена
+      if (editor.SyntaxHighlighting == null)
+      {
+        ApplySqlHighlighting(editor);
+      }
+    }
+
+    private void ApplySqlHighlighting(ICSharpCode.AvalonEdit.TextEditor editor)
+    {
+      editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("SQL")
+                               ?? HighlightingManager.Instance.GetDefinition("TSQL");
+    }
+  }
+}

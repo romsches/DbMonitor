@@ -1,0 +1,83 @@
+﻿using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.WPFObjects.Apps; // Для BsdApplication
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class AuditLogViewModel : DiViewModel
+  {
+    private readonly DbQuery _dbQuery;
+    private string _filterText = string.Empty;
+
+    public ObservableCollection<AuditLogEntry> AuditEntries { get; } = new ObservableCollection<AuditLogEntry>();
+    public ICollectionView AuditLogAnsicht { get; private set; }
+
+    // Команда для кнопки
+    public ICommand RefreshCommand { get; }
+
+    public string FilterText
+    {
+      get => _filterText;
+      set
+      {
+        _filterText = value;
+        OnPropertyChanged(nameof(FilterText));
+        AuditLogAnsicht?.Refresh();
+      }
+    }
+
+    public AuditLogViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger logger, DbQuery dbQuery)
+        : base(serviceProvider, oraProvider, logger)
+    {
+      _dbQuery = dbQuery;
+
+      AuditLogAnsicht = CollectionViewSource.GetDefaultView(AuditEntries);
+      AuditLogAnsicht.Filter = FilterAuditLog;
+
+      RefreshCommand = new DelegateCommand(LoadData);
+
+      LoadData();
+    }
+
+    public void LoadData()
+    {
+      var data = _dbQuery.GetAuditLogEntries();
+
+      BsdApplication.InvokeIfRequired(() =>
+      {
+        AuditEntries.Clear();
+        foreach (var entry in data)
+        {
+          AuditEntries.Add(entry);
+        }
+        AuditLogAnsicht?.Refresh();
+      });
+    }
+
+    private bool FilterAuditLog(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(FilterText)) return true;
+
+      if (obj is AuditLogEntry entry)
+      {
+        var filter = FilterText.ToLower();
+
+        return (entry.DAL_USERNAME?.ToLower().Contains(filter) ?? false) ||
+               (entry.DAL_REASON?.ToLower().Contains(filter) ?? false) ||
+               (entry.DAL_PROGRAM?.ToLower().Contains(filter) ?? false) ||
+               (entry.DAL_TERMINAL?.ToLower().Contains(filter) ?? false) ||
+               (entry.DAL_OSUSER?.ToLower().Contains(filter) ?? false);
+      }
+      return false;
+    }
+  }
+}

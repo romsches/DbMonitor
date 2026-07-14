@@ -1,0 +1,32 @@
+﻿using System;
+using PoorMansTSqlFormatterLib;
+
+namespace Bsd.DbMonitorWPF.Helpers
+{
+  public static class SqlFormatterHelper
+  {
+    public static string Format(string rawSql)
+    {
+      if (string.IsNullOrWhiteSpace(rawSql)) return string.Empty;
+
+      string sqlToFormat = rawSql;
+      int warningIndex = sqlToFormat.IndexOf("--WARNING!", StringComparison.OrdinalIgnoreCase);
+
+      if (warningIndex >= 0)
+      {
+        int selectIndex = sqlToFormat.IndexOf("SELECT", warningIndex, StringComparison.OrdinalIgnoreCase);
+        if (selectIndex > 0)
+        {
+          sqlToFormat = sqlToFormat.Substring(selectIndex);
+        }
+        else
+        {
+          sqlToFormat = sqlToFormat.Substring(warningIndex + 10);
+        }
+      }
+
+      var formatter = new SqlFormattingManager();
+      return formatter.Format(sqlToFormat).Trim();
+    }
+  }
+}

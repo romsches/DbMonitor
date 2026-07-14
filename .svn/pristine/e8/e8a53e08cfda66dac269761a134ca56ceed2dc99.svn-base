@@ -1,0 +1,14 @@
+﻿using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  public partial class DashboardView : UserControl
+  {
+    public DashboardView()
+    {
+      InitializeComponent();
+    }
+
+  }
+}

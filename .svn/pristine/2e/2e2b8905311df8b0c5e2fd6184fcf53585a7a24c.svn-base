@@ -1,0 +1,17 @@
+﻿using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  public partial class JobsView : UserControl
+  {
+    public JobsView()
+    {
+      InitializeComponent();
+      this.Loaded += (s, e) => {
+        if (DataContext is JobsViewModel vm)
+          vm.JobsAktualisierenBefehl.Execute(null);
+      };
+    }
+  }
+}

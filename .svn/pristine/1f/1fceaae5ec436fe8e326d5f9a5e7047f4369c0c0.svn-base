@@ -1,0 +1,16 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Bsd.DbMonitorWPF.Helpers
+{
+  public static class StatusHelper
+  {
+    public static string FormatStatus(int count, string entityName)
+    {
+      return $"Gefunden: {count} {entityName} | Stand: {DateTime.Now:HH:mm:ss}";
+    }
+  }
+}

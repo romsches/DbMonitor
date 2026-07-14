@@ -1,0 +1,90 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows.Data;
+using System.Windows.Input;
+using Bsd.Data.Entities;
+using Bsd.Data.Helper;
+using Bsd.DbMonitorData;
+using Bsd.DbMonitorWPF.Helpers;
+using Bsd.WPFObjects.Apps;
+using Bsd.WPFObjects.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Prism.Commands;
+
+namespace Bsd.DbMonitorWPF.ViewModels
+{
+  public class AuditLogViewModel : DiViewModel
+  {
+    private readonly DbQuery _dbQuery;
+    private string _filterText = string.Empty;
+    private string _status;
+
+    public ObservableCollection<AuditLogEntry> AuditEntries { get; } = new ObservableCollection<AuditLogEntry>();
+    public ICollectionView AuditLogAnsicht { get; }
+
+    public AuditLogViewModel(IServiceProvider serviceProvider, IOraProvider oraProvider, ILogger<AuditLogViewModel> log, DbQuery dbQuery)
+        : base(serviceProvider, oraProvider, log)
+    {
+      _dbQuery = dbQuery;
+      AuditLogAnsicht = CollectionViewSource.GetDefaultView(AuditEntries);
+      AuditLogAnsicht.Filter = FilterAuditLog;
+      RefreshCommand = new DelegateCommand(LoadData);
+    }
+
+    #region Eigenschaften
+
+    public string FilterText
+    {
+      get => _filterText;
+      set { SetVal(ref _filterText, value); AuditLogAnsicht?.Refresh(); }
+    }
+
+    public string Status
+    {
+      get => _status;
+      set => SetVal(ref _status, value);
+    }
+
+    public ICommand RefreshCommand { get; }
+
+    #endregion
+
+    #region Methoden
+
+    public void LoadData()
+    {
+      var data = _dbQuery.GetAuditLogEntries() ?? new List<AuditLogEntry>();
+      AktualisierenIntern(data);
+    }
+
+    /// <summary>
+    /// Aktualisiert die Audit-Logs ohne neuen Datenbankabruf.
+    /// </summary>
+    public void AktualisierenIntern(List<AuditLogEntry> daten)
+    {
+      CollectionHelper.Sync(AuditEntries, daten);
+      AuditLogAnsicht?.Refresh();
+      Status = StatusHelper.FormatStatus(AuditEntries.Count, "Audit Logs");
+    }
+
+    private bool FilterAuditLog(object obj)
+    {
+      if (string.IsNullOrWhiteSpace(FilterText)) return true;
+      if (obj is AuditLogEntry entry)
+      {
+        string f = FilterText.Trim();
+        return Enthaelt(entry.DAL_USERNAME, f) ||
+               Enthaelt(entry.DAL_REASON, f) ||
+               Enthaelt(entry.DAL_PROGRAM, f) ||
+               Enthaelt(entry.DAL_TERMINAL, f) ||
+               Enthaelt(entry.DAL_OSUSER, f);
+      }
+      return false;
+    }
+
+    #endregion
+  }
+}

@@ -1,0 +1,62 @@
+﻿using System.ComponentModel;
+using System.Windows.Controls;
+using Bsd.DbMonitorWPF.ViewModels;
+using ICSharpCode.AvalonEdit.Highlighting;
+
+namespace Bsd.DbMonitorWPF.Views
+{
+  public partial class SqlhistorieView : UserControl
+  {
+    public SqlhistorieView()
+    {
+      InitializeComponent();
+      ApplySqlHighlighting(SqlHistorieEditor);
+      this.Loaded += (s, e) => {
+        if (DataContext is SqlhistorieViewModel vm)
+          vm.SqlAktualisierenBefehl.Execute(null);
+      };
+      this.DataContextChanged += (s, e) => {
+        if (e.OldValue is SqlhistorieViewModel oldVm)
+          oldVm.PropertyChanged -= Vm_PropertyChanged;
+
+        if (e.NewValue is SqlhistorieViewModel newVm)
+        {
+          newVm.PropertyChanged += Vm_PropertyChanged;
+          UpdateEditorContent(newVm);
+        }
+      };
+    }
+
+    private void Vm_PropertyChanged(object sender, PropertyChangedEventArgs e)
+    {
+      if (sender is SqlhistorieViewModel vm)
+      {
+        // Wenn sich der SQL-Text im ViewModel ändert, aktualisieren wir den Editor
+        if (e.PropertyName == nameof(SqlhistorieViewModel.AktuellerHistorieSqlText))
+        {
+          UpdateEditorContent(vm);
+        }
+      }
+    }
+
+    private void UpdateEditorContent(SqlhistorieViewModel vm)
+    {
+      // Setze den Text aus dem ViewModel
+      SqlHistorieEditor.Text = vm.AktuellerHistorieSqlText ?? string.Empty;
+
+      // Syntax-Highlighting sicherstellen
+      if (SqlHistorieEditor.SyntaxHighlighting == null)
+      {
+        ApplySqlHighlighting(SqlHistorieEditor);
+      }
+    }
+
+    private void ApplySqlHighlighting(ICSharpCode.AvalonEdit.TextEditor editor)
+    {
+      editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("SQL")
+                               ?? HighlightingManager.Instance.GetDefinition("TSQL");
+    }
+
+
+  }
+}
