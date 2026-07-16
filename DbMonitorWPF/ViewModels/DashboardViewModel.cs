@@ -1,28 +1,26 @@
 ﻿using System;
-using System.Windows.Input;
-using DbMonitorData;
-using DbMonitorWPF.Helpers;
-using Microsoft.Extensions.Logging;
-using System.Windows.Threading;
 
 namespace DbMonitorWPF.ViewModels
 {
-  /// <summary>
-  /// Das Dashboard-ViewModel zeigt aggregierte Statusinformationen an.
-  /// Es greift lesend auf andere ViewModels zu.
-  /// </summary>
   public class DashboardViewModel : ViewModelBase
   {
-    // Ссылки на ViewModels, которые нужны для отображения
-    public SitzungenViewModel SitzungenVm { get; set; }
-    public SperrenViewModel SperrenVm { get; set; }
-    public JobsViewModel JobsVm { get; set; }
+    private readonly SitzungenViewModel _sitzungenVm;
+    private readonly SperrenViewModel _sperrenVm;
+    private readonly JobsViewModel _jobsVm;
 
-    public DashboardViewModel() { } // Пустой конструктор
+    public DashboardViewModel(
+        SitzungenViewModel sitzungenVm,
+        SperrenViewModel sperrenVm,
+        JobsViewModel jobsVm)
+    {
+      _sitzungenVm = sitzungenVm;
+      _sperrenVm = sperrenVm;
+      _jobsVm = jobsVm;
+    }
 
-    public int AnzahlSitzungen => SitzungenVm?.Sitzungen?.Count ?? 0;
-    public int AnzahlSperren => SperrenVm?.Sperren?.Count ?? 0;
-    public int AnzahlAuffaelligeJobs => JobsVm?.AuffaelligeJobs?.Count ?? 0;
+    public int AnzahlSitzungen => _sitzungenVm?.Sitzungen?.Count ?? 0;
+    public int AnzahlSperren => _sperrenVm?.Sperren?.Count ?? 0;
+    public int AnzahlAuffaelligeJobs => _jobsVm?.AuffaelligeJobs?.Count ?? 0;
 
     public void Refresh()
     {

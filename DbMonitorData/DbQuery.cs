@@ -173,7 +173,6 @@ namespace DbMonitorData
 
       try
       {
-        // 1. Вызов процедуры
         using (var cmd = ErstelleBefehl("BEGIN kill_user_session(:sid, :serial); END;"))
         {
           cmd.Parameters.Add("sid", OracleDbType.Decimal).Value = sid;
@@ -182,7 +181,6 @@ namespace DbMonitorData
           catch (OracleException ex) { if (ex.Number != 31) throw; }
         }
 
-        // 2. Вставка в аудит с динамическим action
         const string auditSql = @"
         INSERT INTO dbmonitor_audit_log
           (id, kill_date, sid, serial_nr, reason, killed_by, sql_text, program, os_user, terminal, action)

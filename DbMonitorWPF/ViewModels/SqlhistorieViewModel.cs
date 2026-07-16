@@ -16,7 +16,7 @@ namespace DbMonitorWPF.ViewModels
   public class SqlhistorieViewModel : SqlBaseViewModel
   {
     private readonly DbQuery _dbQuery;
-    private V_SQL _ausgewaehltesSql; // Правильное имя поля
+    private V_SQL _ausgewaehltesSql;
     private string _filterTextSql;
     private string _statusSql;
     private bool _istTop20SqlModus = false;

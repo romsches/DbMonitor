@@ -132,29 +132,32 @@ namespace DbMonitorWPF.ViewModels
       return false;
     }
 
-    public void AktualisierenIntern(List<V_JOB> daten)
+    public void AktualisierenIntern(List<V_JOB> alleJobs, List<V_JOB> auffaelligJobs)
     {
-      Application.Current.Dispatcher.Invoke(() =>
+      if (alleJobs != null && alleJobs.Count > 0)
       {
-        Jobs.Clear();
-        foreach (var item in daten) Jobs.Add(item);
-        JobsAnsicht?.Refresh();
-        StatusJobs = $"{Jobs.Count} Jobs";
-      });
-    }
-    public void AktualisierenIntern(List<V_JOB> alle, List<V_JOB> auffaellig)
-    {
-      Application.Current.Dispatcher.Invoke(() =>
-      {
-        Jobs.Clear();
-        foreach (var item in alle) Jobs.Add(item);
+        var ausgewaehlterJobName = _ausgewaehlterJob?.JOB_NAME;
 
-        AuffaelligeJobs.Clear();
-        foreach (var item in auffaellig) AuffaelligeJobs.Add(item);
+        CollectionHelper.SyncForce(Jobs, alleJobs);
+        CollectionHelper.SyncForce(AuffaelligeJobs, auffaelligJobs ?? new List<V_JOB>());
 
         JobsAnsicht?.Refresh();
-        StatusJobs = $"{Jobs.Count} Jobs ({AuffaelligeJobs.Count} auffällig)";
-      });
+
+        if (ausgewaehlterJobName != null)
+        {
+          foreach (var job in Jobs)
+          {
+            if (job.JOB_NAME == ausgewaehlterJobName)
+            {
+              AusgewaehlterJob = job;
+              break;
+            }
+          }
+        }
+      }
+
+      StatusJobs = StatusHelper.FormatStatus(Jobs.Count, "Jobs") +
+                   $" ({auffaelligJobs?.Count ?? 0} auffällig)";
     }
   }
 }

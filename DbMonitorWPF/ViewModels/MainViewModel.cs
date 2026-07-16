@@ -39,15 +39,21 @@ namespace DbMonitorWPF.ViewModels
       ProzesseVm = prozesseVm;
       DashboardVm = dashboardVm;
 
+      // Navigations-Befehle
       WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
       WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
       WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
       WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
       WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
 
+      // Analyse-Befehle für Dashboard
+      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
+      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
+
       LoadedBefehl = new DelegateCommand(OnLoaded);
       UnloadedBefehl = new DelegateCommand(OnUnloaded);
 
+      // Status-Abonnements
       SitzungenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SitzungenVm.StatusSitzungen)) GlobalenStatusTextAktualisieren(); };
       SperrenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SperrenVm.StatusSperren)) GlobalenStatusTextAktualisieren(); };
       JobsVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(JobsVm.StatusJobs)) GlobalenStatusTextAktualisieren(); };
@@ -81,6 +87,8 @@ namespace DbMonitorWPF.ViewModels
     public ICommand WechsleZuProzesseBefehl { get; }
     public ICommand WechsleZuJobsBefehl { get; }
     public ICommand WechsleZuSperrenBefehl { get; }
+    public ICommand LadeTopSqlBefehl { get; }
+    public ICommand LadeTopProzesseBefehl { get; }
     public ICommand LoadedBefehl { get; }
     public ICommand UnloadedBefehl { get; }
 
@@ -123,14 +131,15 @@ namespace DbMonitorWPF.ViewModels
 
     private void AlleTabsAktualisieren()
     {
-      ((System.Windows.Input.ICommand)SitzungenVm?.SitzungenAktualisierenBefehl)?.Execute(null);
-      ((System.Windows.Input.ICommand)SperrenVm?.SperrenAktualisierenBefehl)?.Execute(null);
-      ((System.Windows.Input.ICommand)JobsVm?.JobsAktualisierenBefehl)?.Execute(null);
+      ((ICommand)SitzungenVm?.SitzungenAktualisierenBefehl)?.Execute(null);
+      ((ICommand)SperrenVm?.SperrenAktualisierenBefehl)?.Execute(null);
+      ((ICommand)JobsVm?.JobsAktualisierenBefehl)?.Execute(null);
       AuditLogVm?.RefreshCommand?.Execute(null);
-      ((System.Windows.Input.ICommand)SqlhistorieVm?.SqlAktualisierenBefehl)?.Execute(null);
-      ((System.Windows.Input.ICommand)ProzesseVm?.ProzesseAktualisierenBefehl)?.Execute(null);
+      ((ICommand)SqlhistorieVm?.SqlAktualisierenBefehl)?.Execute(null);
+      ((ICommand)ProzesseVm?.ProzesseAktualisierenBefehl)?.Execute(null);
       DashboardVm?.Refresh();
     }
+
     private void TimerZyklusAusfuehren()
     {
       try
@@ -164,6 +173,18 @@ namespace DbMonitorWPF.ViewModels
       }
     }
 
+    private void LadeTopSqlAusfuehren()
+    {
+      ((ICommand)SqlhistorieVm?.LadeTopSqlBefehl)?.Execute(null);
+      AktiverTabIndex = 2;
+    }
+
+    private void LadeTopProzesseAusfuehren()
+    {
+      ((ICommand)ProzesseVm?.LadeTopProzesseBefehl)?.Execute(null);
+      AktiverTabIndex = 3;
+    }
+
     #endregion
 
     #region Private Methoden – Status
@@ -182,6 +203,7 @@ namespace DbMonitorWPF.ViewModels
       }
       GlobalerStatusText = string.IsNullOrEmpty(status) ? "Bereit" : status;
     }
+
 
     #endregion
   }

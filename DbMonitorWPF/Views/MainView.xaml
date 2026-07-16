@@ -44,7 +44,7 @@
       </TabItem>
 
       <TabItem Header="SQL-Historie (V$SQL)">
-        <views:SqlhistorieView DataContext="{Binding SqlHistorieVm}"/>
+        <views:SqlhistorieView DataContext="{Binding SqlhistorieVm}"/>
       </TabItem>
 
       <TabItem Header="Prozesse (V$PROCESS)">
