@@ -11,13 +11,13 @@ namespace DbMonitorData
     #region Eigenschaften
 
     /// <summary>Unformatierter SQL-Rohtext (Original aus V$SQL).</summary>
-    public string RohSql { get; }
+    public string RohSql { get; set; }
 
     /// <summary>Formatierter SQL-Text (Pretty-Print).</summary>
-    public string FormatierterSql { get; }
+    public string FormatierterSql { get; set; }
 
     /// <summary>Die mit dem SQL verknüpften Bind-Variablen als lesbare Textliste.</summary>
-    public string BindVariablen { get; }
+    public string BindVariablen { get; set; }
 
     /// <summary>
     /// Kurzbezeichner für die Anzeige im Dashboard.
@@ -39,9 +39,6 @@ namespace DbMonitorData
     /// <summary>
     /// Initialisiert eine neue Instanz des <see cref="SqlTextErgebnis"/>.
     /// </summary>
-    /// <param name="rohSql">Der rohe SQL-Text.</param>
-    /// <param name="formatierterSql">Die formatierte SQL-Variante.</param>
-    /// <param name="bindVariablen">Die Bind-Variablen.</param>
     public SqlTextErgebnis(string rohSql, string formatierterSql, string bindVariablen)
     {
       RohSql = rohSql ?? string.Empty;
@@ -56,7 +53,6 @@ namespace DbMonitorData
     /// <summary>
     /// Erstellt eine leere Instanz, optional mit einem Hinweis-Text.
     /// </summary>
-    /// <param name="hinweis">Optionaler Hinweis- oder Fehlertext.</param>
     public static SqlTextErgebnis Leer(string hinweis = "") =>
         new SqlTextErgebnis(hinweis, string.Empty, string.Empty);
 

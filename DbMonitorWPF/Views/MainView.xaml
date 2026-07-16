@@ -1,34 +1,35 @@
 ﻿<UserControl x:Class="DbMonitorWPF.Views.MainView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
              xmlns:views="clr-namespace:DbMonitorWPF.Views"
              xmlns:conv="clr-namespace:DbMonitorWPF.Converters"
              mc:Ignorable="d"
-             d:DesignHeight="700" d:DesignWidth="1200">
+             d:DesignHeight="700" 
+             d:DesignWidth="1200">
 
   <UserControl.Resources>
     <ResourceDictionary>
-      <conv:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter"/>
-      <conv:BoolInvertedToCollapsedConverter x:Key="BoolInvertedToCollapsedConverter"/>
+      <conv:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter" />
+      <conv:BoolInvertedToCollapsedConverter x:Key="BoolInvertedToCollapsedConverter" />
     </ResourceDictionary>
   </UserControl.Resources>
 
   <i:Interaction.Triggers>
     <i:EventTrigger EventName="Loaded">
-      <i:InvokeCommandAction Command="{Binding LoadedBefehl}"/>
+      <i:InvokeCommandAction Command="{Binding LoadedBefehl}" />
     </i:EventTrigger>
     <i:EventTrigger EventName="Unloaded">
-      <i:InvokeCommandAction Command="{Binding UnloadedBefehl}"/>
+      <i:InvokeCommandAction Command="{Binding UnloadedBefehl}" />
     </i:EventTrigger>
   </i:Interaction.Triggers>
 
   <Grid Background="#F5F5F5" Margin="5">
     <Grid.RowDefinitions>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
     <TabControl Grid.Row="0"
@@ -44,19 +45,19 @@
       </TabItem>
 
       <TabItem Header="SQL-Historie (V$SQL)">
-        <views:SqlhistorieView DataContext="{Binding SqlhistorieVm}"/>
+        <views:SqlhistorieView DataContext="{Binding SqlhistorieVm}" />
       </TabItem>
 
       <TabItem Header="Prozesse (V$PROCESS)">
-        <views:ProzesseView DataContext="{Binding ProzesseVm}"/>
+        <views:ProzesseView DataContext="{Binding ProzesseVm}" />
       </TabItem>
 
       <TabItem Header="Datenbank-Jobs">
-        <views:JobsView DataContext="{Binding JobsVm}"/>
+        <views:JobsView DataContext="{Binding JobsVm}" />
       </TabItem>
 
       <TabItem Header="Sperren (V$LOCK)">
-        <views:SperrenView DataContext="{Binding SperrenVm}"/>
+        <views:SperrenView DataContext="{Binding SperrenVm}" />
       </TabItem>
 
       <TabItem Header="Audit Log">
@@ -70,11 +71,10 @@
                 BorderBrush="#CCCCCC"
                 BorderThickness="0,1,0,0">
       <TextBlock Text="{Binding GlobalerStatusText, Mode=OneWay}"
-                       Foreground="#757575" 
+                       Foreground="#757575"
                        FontSize="11"
-                       HorizontalAlignment="Left" 
-                       VerticalAlignment="Center"/>
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Center" />
     </Border>
-
   </Grid>
 </UserControl>

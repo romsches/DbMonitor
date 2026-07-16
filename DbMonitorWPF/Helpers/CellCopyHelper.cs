@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace DbMonitorWPF.Helpers
 {
@@ -11,8 +12,6 @@ namespace DbMonitorWPF.Helpers
     /// <summary>
     /// Behandelt das Click-Event eines Kontextmenü-Eintrags, um den Inhalt der ausgewählten Zelle zu kopieren.
     /// </summary>
-    /// <param name="sender">Das auslösende MenuItem.</param>
-    /// <param name="e">Die Routing-Event-Argumente.</param>
     public static void CopyCell_Click(object sender, RoutedEventArgs e)
     {
       if (sender is MenuItem menuItem &&
@@ -21,7 +20,7 @@ namespace DbMonitorWPF.Helpers
       {
         string text = ExtractCellContent(cell);
 
-        if (!string.IsNullOrEmpty(text))
+        if (!string.IsNullOrWhiteSpace(text))
         {
           CopyToClipboard(text);
         }
@@ -30,16 +29,21 @@ namespace DbMonitorWPF.Helpers
 
     /// <summary>
     /// Extrahiert den Textinhalt aus einer DataGrid-Zelle.
+    /// Durchläuft bei Bedarf den VisualTree, um Steuerelemente zu finden.
     /// </summary>
     private static string ExtractCellContent(DataGridCell cell)
     {
-      // Fall 1: Standardmäßiger TextBlock innerhalb der Zelle
-      if (cell.Content is TextBlock textBlock)
+      // 1. Direkte Prüfung
+      if (cell.Content is TextBlock textBlock) return textBlock.Text;
+
+      // 2. Prüfung auf ContentPresenter (Standard in DataGrid-Templates)
+      if (cell.Content is ContentPresenter cp)
       {
-        return textBlock.Text;
+        var content = cp.Content;
+        return content?.ToString() ?? string.Empty;
       }
 
-      // Fall 2: Andere Steuerelemente oder ContentPresenter (Konvertierung zum String)
+      // 3. Fallback
       return cell.Content?.ToString() ?? string.Empty;
     }
 

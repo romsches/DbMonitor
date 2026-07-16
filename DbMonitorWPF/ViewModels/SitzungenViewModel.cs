@@ -5,27 +5,35 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Data;
-using System.Windows.Input;
 using DbMonitorData;
-using DbMonitorWPF.Helpers;
 using DbMonitorWPF.Views;
 using Microsoft.Extensions.Logging;
 using Prism.Commands;
 
 namespace DbMonitorWPF.ViewModels
 {
+  /// <summary>
+  /// ViewModel zur Verwaltung und Überwachung von Datenbanksitzungen.
+  /// </summary>
   public class SitzungenViewModel : SqlBaseViewModel
   {
+    #region Felder
+
     private readonly ILogger _log;
     private readonly DbQuery _dbQuery;
     private string _filterTextSitzungen;
     private string _statusSitzungen;
     private V_SESSION_MONITOR _ausgewaehlteSitzung;
 
+    #endregion
+
+    #region Konstruktor
+
     public SitzungenViewModel(DbQuery dbQuery, ILogger<SitzungenViewModel> log)
     {
       _log = log;
       _dbQuery = dbQuery;
+
       Sitzungen = new ObservableCollection<V_SESSION_MONITOR>();
       SitzungenAnsicht = CollectionViewSource.GetDefaultView(Sitzungen);
       SitzungenAnsicht.Filter = FilterSitzungenDelegate;
@@ -34,6 +42,10 @@ namespace DbMonitorWPF.ViewModels
       SitzungBeendenBefehl = new DelegateCommand(SitzungBeendenAusfuehren, () => AusgewaehlteSitzung != null);
       KopiereSitzungsSqlBefehl = new DelegateCommand(KopiereSitzungsSqlAusfuehren, () => !string.IsNullOrEmpty(AktuellerSqlText));
     }
+
+    #endregion
+
+    #region Eigenschaften
 
     public ObservableCollection<V_SESSION_MONITOR> Sitzungen { get; }
     public ICollectionView SitzungenAnsicht { get; }
@@ -46,8 +58,8 @@ namespace DbMonitorWPF.ViewModels
         _ausgewaehlteSitzung = value;
         OnPropertyChanged();
         AusgewaehlteSitzungSqlLaden();
-        ((DelegateCommand)SitzungBeendenBefehl).RaiseCanExecuteChanged();
-        ((DelegateCommand)KopiereSitzungsSqlBefehl).RaiseCanExecuteChanged();
+        SitzungBeendenBefehl.RaiseCanExecuteChanged();
+        KopiereSitzungsSqlBefehl.RaiseCanExecuteChanged();
       }
     }
 
@@ -66,6 +78,10 @@ namespace DbMonitorWPF.ViewModels
     public DelegateCommand SitzungenAktualisierenBefehl { get; }
     public DelegateCommand SitzungBeendenBefehl { get; }
     public DelegateCommand KopiereSitzungsSqlBefehl { get; }
+
+    #endregion
+
+    #region Methoden
 
     private void SitzungenAktualisierenAusfuehren()
     {
@@ -103,7 +119,7 @@ namespace DbMonitorWPF.ViewModels
         var ergebnis = _dbQuery.GetCurrentSqlText(AusgewaehlteSitzung.SID.Value, AusgewaehlteSitzung.SERIAL.Value);
         SetSqlData(ergebnis?.SqlText);
       }
-      ((DelegateCommand)KopiereSitzungsSqlBefehl).RaiseCanExecuteChanged();
+      KopiereSitzungsSqlBefehl.RaiseCanExecuteChanged();
     }
 
     private void KopiereSitzungsSqlAusfuehren()
@@ -120,7 +136,8 @@ namespace DbMonitorWPF.ViewModels
       if (obj is V_SESSION_MONITOR s)
       {
         string f = FilterTextSitzungen.ToLower();
-        return (s.USERNAME ?? "").ToLower().Contains(f) || (s.PROGRAM ?? "").ToLower().Contains(f);
+        return (s.USERNAME ?? "").ToLower().Contains(f) ||
+               (s.PROGRAM ?? "").ToLower().Contains(f);
       }
       return false;
     }
@@ -183,5 +200,7 @@ namespace DbMonitorWPF.ViewModels
         StatusSitzungen = $"{Sitzungen.Count} Sitzungen";
       });
     }
+
+    #endregion
   }
 }

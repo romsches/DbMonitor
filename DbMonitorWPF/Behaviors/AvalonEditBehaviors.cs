@@ -40,15 +40,19 @@ namespace DbMonitorWPF.Behaviors
     /// </summary>
     private static void OnSyntaxHighlightingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-      if (d is TextEditor editor && e.NewValue is string highlightingName)
+      if (!(d is TextEditor editor))
       {
-        // Versucht, die Definition aus dem HighlightingManager zu laden
-        var definition = HighlightingManager.Instance.GetDefinition(highlightingName);
+        return;
+      }
 
-        if (definition != null)
-        {
-          editor.SyntaxHighlighting = definition;
-        }
+      if (e.NewValue is string highlightingName)
+      {
+        // Lädt die Definition aus dem HighlightingManager
+        editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition(highlightingName);
+      }
+      else
+      {
+        editor.SyntaxHighlighting = null;
       }
     }
 

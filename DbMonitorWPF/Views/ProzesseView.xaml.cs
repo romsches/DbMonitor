@@ -7,12 +7,18 @@ using DbMonitorWPF.Helpers;
 namespace DbMonitorWPF.Views
 {
   /// <summary>
-  /// Code-Behind für die ProzesseView.
-  /// Verantwortlich für die Anzeige der aktiven Oracle-Prozesse.
+  /// Interaktionslogik für ProzesseView.xaml.
+  /// Verantwortlich für die Anzeige und Verwaltung der aktiven Oracle-Prozesse.
   /// </summary>
   public partial class ProzesseView : UserControl
   {
-    private DataGridCell _lastRightClickedCell;
+    #region Felder
+
+    private DataGridCell _letzteRechtsgeklickteZelle;
+
+    #endregion
+
+    #region Konstruktor
 
     public ProzesseView()
     {
@@ -20,37 +26,57 @@ namespace DbMonitorWPF.Views
       this.Loaded += OnViewLoaded;
     }
 
+    #endregion
+
+    #region Event-Handler
+
+    /// <summary>
+    /// Initialisiert die Daten beim Laden der View.
+    /// </summary>
     private void OnViewLoaded(object sender, RoutedEventArgs e)
     {
-      if (DataContext is ProzesseViewModel vm)
+      if (DataContext is ProzesseViewModel viewModel)
       {
-        if (vm.ProzesseAktualisierenBefehl.CanExecute(null))
-          vm.ProzesseAktualisierenBefehl.Execute(null);
+        if (viewModel.ProzesseAktualisierenBefehl.CanExecute(null))
+        {
+          viewModel.ProzesseAktualisierenBefehl.Execute(null);
+        }
       }
     }
 
-    // Обработчик для сохранения ячейки при клике
+    /// <summary>
+    /// Speichert die Zelle, auf die mit der rechten Maustaste geklickt wurde, für Kontextmenü-Aktionen.
+    /// </summary>
     private void DataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-      _lastRightClickedCell = DataGridHelper.FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
+      _letzteRechtsgeklickteZelle = DataGridHelper.FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
     }
 
-    // Обработчик для копирования текста ячейки
+    /// <summary>
+    /// Kopiert den Inhalt der aktuell gewählten Zelle in die Zwischenablage.
+    /// </summary>
     private void CopyCell_Click(object sender, RoutedEventArgs e)
     {
-      if (_lastRightClickedCell == null) return;
+      if (_letzteRechtsgeklickteZelle == null) return;
 
-      string text = DataGridHelper.GetCellText(_lastRightClickedCell);
-      if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
-    }
-
-    // Handler für das Kopieren der gesamten Zeile
-    private void CopyRow_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-      if (sender is DataGrid dg)
+      string text = DataGridHelper.GetCellText(_letzteRechtsgeklickteZelle);
+      if (!string.IsNullOrEmpty(text))
       {
-        DataGridHelper.CopySelectedRow(dg);
+        Clipboard.SetText(text);
       }
     }
+
+    /// <summary>
+    /// Kopiert die gesamte Zeile in die Zwischenablage.
+    /// </summary>
+    private void CopyRow_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (sender is DataGrid dataGrid)
+      {
+        DataGridHelper.CopySelectedRow(dataGrid);
+      }
+    }
+
+    #endregion
   }
 }

@@ -15,8 +15,11 @@ namespace DbMonitorWPF.Helpers
     /// <returns>Ein formatierter String mit Elementanzahl und aktuellem Zeitstempel.</returns>
     public static string FormatStatus(int count, string entityName)
     {
-      // Verwendung von String-Interpolation für bessere Lesbarkeit und Performance
-      return $"Gefunden: {count} {entityName} | Stand: {DateTime.Now:HH:mm:ss}";
+      // Die Verwendung von 'G' für das Zeitformat ist ebenfalls eine Option, 
+      // aber 'HH:mm:ss' ist für Statuszeilen im Dashboard ideal.
+      string timeStamp = DateTime.Now.ToString("HH:mm:ss");
+
+      return $"Gefunden: {count} {entityName} | Stand: {timeStamp}";
     }
   }
 }

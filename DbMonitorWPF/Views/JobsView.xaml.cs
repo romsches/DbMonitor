@@ -7,11 +7,17 @@ using DbMonitorWPF.Helpers;
 namespace DbMonitorWPF.Views
 {
   /// <summary>
-  /// Code-Behind für die JobsView.
+  /// Interaktionslogik für JobsView.xaml.
   /// </summary>
   public partial class JobsView : UserControl
   {
-    private DataGridCell _lastRightClickedCell;
+    #region Felder
+
+    private DataGridCell _letzteRechtsgeklickteZelle;
+
+    #endregion
+
+    #region Konstruktor
 
     public JobsView()
     {
@@ -19,32 +25,57 @@ namespace DbMonitorWPF.Views
       this.Loaded += OnViewLoaded;
     }
 
+    #endregion
+
+    #region Event-Handler
+
+    /// <summary>
+    /// Initialisiert die Daten beim Laden der View.
+    /// </summary>
     private void OnViewLoaded(object sender, RoutedEventArgs e)
     {
-      if (DataContext is JobsViewModel vm)
-        ((System.Windows.Input.ICommand)vm.JobsAktualisierenBefehl)?.Execute(null);
-    }
-    // Обработчик для сохранения ячейки при клике
-    private void DataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
-    {
-      _lastRightClickedCell = DataGridHelper.FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
-    }
-
-    // Обработчик для копирования текста ячейки
-    private void CopyCell_Click(object sender, RoutedEventArgs e)
-    {
-      if (_lastRightClickedCell == null) return;
-
-      string text = DataGridHelper.GetCellText(_lastRightClickedCell);
-      if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
-    }
-
-    private void CopyRow_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-      if (sender is DataGrid dg)
+      if (DataContext is JobsViewModel viewModel)
       {
-        DataGridHelper.CopySelectedRow(dg);
+        if (viewModel.JobsAktualisierenBefehl.CanExecute(null))
+        {
+          viewModel.JobsAktualisierenBefehl.Execute(null);
+        }
       }
     }
+
+    /// <summary>
+    /// Speichert die Zelle, auf die mit der rechten Maustaste geklickt wurde.
+    /// </summary>
+    private void DataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+      _letzteRechtsgeklickteZelle = DataGridHelper.FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
+    }
+
+    /// <summary>
+    /// Kopiert den Inhalt der aktuell gewählten Zelle in die Zwischenablage.
+    /// </summary>
+    private void CopyCell_Click(object sender, RoutedEventArgs e)
+    {
+      if (_letzteRechtsgeklickteZelle == null) return;
+
+      string text = DataGridHelper.GetCellText(_letzteRechtsgeklickteZelle);
+      if (!string.IsNullOrEmpty(text))
+      {
+        Clipboard.SetText(text);
+      }
+    }
+
+    /// <summary>
+    /// Kopiert die gesamte Zeile in die Zwischenablage.
+    /// </summary>
+    private void CopyRow_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (sender is DataGrid dataGrid)
+      {
+        DataGridHelper.CopySelectedRow(dataGrid);
+      }
+    }
+
+    #endregion
   }
 }

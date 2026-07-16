@@ -10,29 +10,50 @@ using ICSharpCode.AvalonEdit.Highlighting;
 
 namespace DbMonitorWPF.Views
 {
+  /// <summary>
+  /// Interaktionslogik für SitzungenView.xaml.
+  /// Verantwortlich für die Anzeige der aktiven Sitzungen und deren SQL-Details.
+  /// </summary>
   public partial class SitzungenView : UserControl
   {
-    private DataGridCell _lastRightClickedCell;
+    #region Felder
+
+    private DataGridCell _letzteRechtsgeklickteZelle;
+
+    #endregion
+
+    #region Konstruktor
 
     public SitzungenView()
     {
       InitializeComponent();
       ApplySqlHighlighting(SqlEditorSitzungen);
+
       this.Loaded += OnViewLoaded;
       this.DataContextChanged += OnDataContextChanged;
     }
 
+    #endregion
+
+    #region Event-Handler
+
     private void OnViewLoaded(object sender, RoutedEventArgs e)
     {
-      if (DataContext is SitzungenViewModel vm)
-        if (((System.Windows.Input.ICommand)vm.SitzungenAktualisierenBefehl).CanExecute(null))
-          ((System.Windows.Input.ICommand)vm.SitzungenAktualisierenBefehl).Execute(null);
+      if (DataContext is SitzungenViewModel viewModel)
+      {
+        if (viewModel.SitzungenAktualisierenBefehl.CanExecute())
+        {
+          viewModel.SitzungenAktualisierenBefehl.Execute();
+        }
+      }
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
       if (e.OldValue is SitzungenViewModel oldVm)
+      {
         oldVm.PropertyChanged -= Vm_PropertyChanged;
+      }
 
       if (e.NewValue is SitzungenViewModel newVm)
       {
@@ -44,12 +65,18 @@ namespace DbMonitorWPF.Views
     private void Vm_PropertyChanged(object sender, PropertyChangedEventArgs e)
     {
       if (sender is SitzungenViewModel vm && e.PropertyName == nameof(SqlBaseViewModel.AktuellerSqlText))
+      {
         UpdateEditorContent(vm);
+      }
     }
 
-    private void UpdateEditorContent(SitzungenViewModel vm)
+    #endregion
+
+    #region Methoden
+
+    private void UpdateEditorContent(SitzungenViewModel viewModel)
     {
-      Dispatcher.Invoke(() => SqlEditorSitzungen.Text = vm.AktuellerSqlText ?? string.Empty);
+      Dispatcher.Invoke(() => SqlEditorSitzungen.Text = viewModel.AktuellerSqlText ?? string.Empty);
     }
 
     private void ApplySqlHighlighting(TextEditor editor)
@@ -60,54 +87,29 @@ namespace DbMonitorWPF.Views
 
     private void DataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-      _lastRightClickedCell = FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
+      _letzteRechtsgeklickteZelle = DataGridHelper.FindParent<DataGridCell>(e.OriginalSource as DependencyObject);
     }
 
     private void CopyRow_Executed(object sender, ExecutedRoutedEventArgs e)
     {
-      if (sender is DataGrid dg)
-        DataGridHelper.CopySelectedRow(dg);
+      if (sender is DataGrid dataGrid)
+      {
+        DataGridHelper.CopySelectedRow(dataGrid);
+      }
     }
 
     private void CopyCell_Click(object sender, RoutedEventArgs e)
     {
-      if (_lastRightClickedCell == null) return;
+      if (_letzteRechtsgeklickteZelle == null) return;
 
-      string text = null;
-      var content = _lastRightClickedCell.Content;
-
-      if (content is TextBlock tb)
-        text = tb.Text;
-      else if (content is ContentPresenter cp)
-      {
-        var innerTb = FindVisualChild<TextBlock>(cp);
-        if (innerTb != null) text = innerTb.Text;
-      }
-      else
-        text = content?.ToString();
+      string text = DataGridHelper.GetCellText(_letzteRechtsgeklickteZelle);
 
       if (!string.IsNullOrEmpty(text))
-        Clipboard.SetText(text);
-    }
-
-    private T FindParent<T>(DependencyObject child) where T : DependencyObject
-    {
-      DependencyObject parent = VisualTreeHelper.GetParent(child);
-      while (parent != null && !(parent is T))
-        parent = VisualTreeHelper.GetParent(parent);
-      return parent as T;
-    }
-
-    private T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
-    {
-      for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
       {
-        var child = VisualTreeHelper.GetChild(parent, i);
-        if (child is T result) return result;
-        var found = FindVisualChild<T>(child);
-        if (found != null) return found;
+        Clipboard.SetText(text);
       }
-      return null;
     }
+
+    #endregion
   }
 }

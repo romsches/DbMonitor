@@ -1,33 +1,61 @@
-﻿using System.Configuration; // Обязательно добавь
+﻿using System;
+using System.Configuration;
+using System.Data;
 using Oracle.ManagedDataAccess.Client;
 
 namespace DbMonitorData
 {
-  public class OracleConnectionProvider
+  /// <summary>
+  /// Verwaltet die Oracle-Datenbankverbindung mit sicherem Ressourcen-Management.
+  /// </summary>
+  public class OracleConnectionProvider : IDisposable
   {
-    public OracleConnection Connection { get; private set; }
+    private OracleConnection _connection;
+
+    public OracleConnection Connection => _connection;
 
     public OracleConnectionProvider()
     {
-      Connection = new OracleConnection();
+      _connection = new OracleConnection();
     }
 
-    // Этот метод берет строку из App.config по имени ключа
+    /// <summary>
+    /// Baut die Verbindung basierend auf einem Connection-String aus der App.config auf.
+    /// </summary>
     public void ConnectFromConfig(string connectionStringName)
     {
-      string connString = ConfigurationManager.ConnectionStrings[connectionStringName].ConnectionString;
-      SetConnectionString(connString);
+      var settings = ConfigurationManager.ConnectionStrings[connectionStringName];
+      if (settings == null)
+        throw new ConfigurationErrorsException($"Connection-String '{connectionStringName}' nicht in Config gefunden.");
+
+      SetConnectionString(settings.ConnectionString);
     }
 
     public void SetConnectionString(string connectionString)
     {
-      if (Connection.State == System.Data.ConnectionState.Open)
-        Connection.Close();
+      if (_connection.State == ConnectionState.Open)
+        _connection.Close();
 
-      Connection.ConnectionString = connectionString;
-      Connection.Open();
+      _connection.ConnectionString = connectionString;
+      _connection.Open();
     }
 
-    public bool IsConnected => Connection != null && Connection.State == System.Data.ConnectionState.Open;
+    public bool IsConnected => _connection != null && _connection.State == ConnectionState.Open;
+
+    /// <summary>
+    /// Gibt die Datenbankressourcen explizit frei.
+    /// </summary>
+    public void Dispose()
+    {
+      if (_connection != null)
+      {
+        if (_connection.State == ConnectionState.Open)
+          _connection.Close();
+
+        _connection.Dispose();
+        _connection = null;
+      }
+      GC.SuppressFinalize(this);
+    }
   }
 }

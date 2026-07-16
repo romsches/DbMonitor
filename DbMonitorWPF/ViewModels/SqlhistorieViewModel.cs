@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -13,22 +15,23 @@ using Prism.Commands;
 
 namespace DbMonitorWPF.ViewModels
 {
+  /// <summary>
+  /// ViewModel zur Verwaltung und Analyse der SQL-Historie.
+  /// </summary>
   public class SqlhistorieViewModel : SqlBaseViewModel
   {
+    #region Felder
+
     private readonly DbQuery _dbQuery;
     private V_SQL _ausgewaehltesSql;
-    private string _filterTextSql;
-    private string _statusSql;
+    private string _filterTextSql = string.Empty;
+    private string _statusSql = string.Empty;
     private bool _istTop20SqlModus = false;
-    private System.Threading.CancellationTokenSource _ladeCts;
+    private CancellationTokenSource _ladeCts;
 
-    public ObservableCollection<V_SQL> SqlVerlauf { get; }
-    public ICollectionView SqlVerlaufAnsicht { get; }
+    #endregion
 
-    public ICommand SqlAktualisierenBefehl { get; }
-    public ICommand LadeTopSqlBefehl { get; }
-    public ICommand AlleSqlLadenBefehl { get; }
-    public ICommand KopiereHistorieSqlBefehl { get; }
+    #region Konstruktor
 
     public SqlhistorieViewModel(DbQuery dbQuery)
     {
@@ -43,33 +46,63 @@ namespace DbMonitorWPF.ViewModels
       KopiereHistorieSqlBefehl = new DelegateCommand(KopiereHistorieSqlAusfuehren, () => AusgewaehltesSql != null);
     }
 
+    #endregion
+
+    #region Eigenschaften
+
+    public ObservableCollection<V_SQL> SqlVerlauf { get; }
+    public ICollectionView SqlVerlaufAnsicht { get; }
+
+    public ICommand SqlAktualisierenBefehl { get; }
+    public ICommand LadeTopSqlBefehl { get; }
+    public ICommand AlleSqlLadenBefehl { get; }
+    public ICommand KopiereHistorieSqlBefehl { get; }
+
     public V_SQL AusgewaehltesSql
     {
       get => _ausgewaehltesSql;
       set
       {
-        if (_ausgewaehltesSql == value) return;
-        _ausgewaehltesSql = value; // Исправлено: добавлена буква 'e' (было _ausgewaehlteSql)
-        OnPropertyChanged();
-        AktualisiereHistorieSqlAnsicht();
-        ((DelegateCommand)KopiereHistorieSqlBefehl).RaiseCanExecuteChanged();
+        if (SetProperty(ref _ausgewaehltesSql, value))
+        {
+          AktualisiereHistorieSqlAnsicht();
+          ((DelegateCommand)KopiereHistorieSqlBefehl).RaiseCanExecuteChanged();
+        }
+      }
+    }
+
+    public string FilterTextSql
+    {
+      get => _filterTextSql;
+      set
+      {
+        if (SetProperty(ref _filterTextSql, value))
+          SqlVerlaufAnsicht?.Refresh();
       }
     }
 
     public string StatusSql
     {
       get => _statusSql;
-      set { _statusSql = value; OnPropertyChanged(); }
+      set => SetProperty(ref _statusSql, value);
     }
 
-    public string FilterTextSql
+    #endregion
+
+    #region Methoden
+
+    public void LadeTopSqlAusfuehren()
     {
-      get => _filterTextSql;
-      set { _filterTextSql = value; OnPropertyChanged(); SqlVerlaufAnsicht.Refresh(); }
+      _istTop20SqlModus = true;
+      LadeSqlDaten(true);
     }
 
-    public void LadeTopSqlAusfuehren() { _istTop20SqlModus = true; LadeSqlDaten(true); }
-    private void LadeAlleSqlAusfuehren() { _istTop20SqlModus = false; LadeSqlDaten(false); }
+    private void LadeAlleSqlAusfuehren()
+    {
+      _istTop20SqlModus = false;
+      LadeSqlDaten(false);
+    }
+
     private void SqlAktualisierenAusfuehren() => LadeSqlDaten(_istTop20SqlModus);
 
     private void LadeSqlDaten(bool nurTop20)
@@ -77,31 +110,32 @@ namespace DbMonitorWPF.ViewModels
       string vorherigeSqlId = AusgewaehltesSql?.SQL_ID;
 
       _ladeCts?.Cancel();
-      _ladeCts = new System.Threading.CancellationTokenSource();
+      _ladeCts = new CancellationTokenSource();
       var token = _ladeCts.Token;
 
-      StatusSql = "Wird geladen...";
+      StatusSql = "Daten werden geladen...";
 
-      System.Threading.Tasks.Task.Run(() =>
+      Task.Run(() =>
       {
-        var data = nurTop20 ? (_dbQuery.GetTopExecutedSqlList() ?? new List<V_SQL>())
-                            : (_dbQuery.GetAllSqlList() ?? new List<V_SQL>());
+        var data = nurTop20
+            ? (_dbQuery.GetTopExecutedSqlList() ?? new List<V_SQL>())
+            : (_dbQuery.GetAllSqlList() ?? new List<V_SQL>());
 
         if (token.IsCancellationRequested) return;
 
         Application.Current.Dispatcher.Invoke(() =>
         {
           if (token.IsCancellationRequested) return;
-          SqlVerlauf.Clear();
-          foreach (var item in data) SqlVerlauf.Add(item);
+
+          CollectionHelper.SyncForce(SqlVerlauf, data);
 
           if (!string.IsNullOrEmpty(vorherigeSqlId))
           {
             AusgewaehltesSql = SqlVerlauf.FirstOrDefault(s => s.SQL_ID == vorherigeSqlId);
           }
 
-          SqlVerlaufAnsicht.Refresh();
-          StatusSql = $"{SqlVerlauf.Count} SQL-Einträge";
+          SqlVerlaufAnsicht?.Refresh();
+          StatusSql = $"{SqlVerlauf.Count} SQL-Einträge gefunden";
         });
       }, token);
     }
@@ -112,16 +146,15 @@ namespace DbMonitorWPF.ViewModels
 
       Application.Current.Dispatcher.Invoke(() =>
       {
-        SqlVerlauf.Clear();
-        foreach (var item in daten) SqlVerlauf.Add(item);
+        CollectionHelper.SyncForce(SqlVerlauf, daten);
 
         if (!string.IsNullOrEmpty(vorherigeSqlId))
         {
           AusgewaehltesSql = SqlVerlauf.FirstOrDefault(s => s.SQL_ID == vorherigeSqlId);
         }
 
-        SqlVerlaufAnsicht.Refresh();
-        StatusSql = $"{SqlVerlauf.Count} SQL-Einträge";
+        SqlVerlaufAnsicht?.Refresh();
+        StatusSql = $"{SqlVerlauf.Count} SQL-Einträge gefunden";
       });
     }
 
@@ -159,5 +192,7 @@ namespace DbMonitorWPF.ViewModels
     }
 
     public void SortiereNachAusfuehrungen() => LadeTopSqlAusfuehren();
+
+    #endregion
   }
 }

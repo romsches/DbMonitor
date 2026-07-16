@@ -6,28 +6,29 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Input;
 using DbMonitorData;
+using DbMonitorWPF.Helpers;
 using Microsoft.Extensions.Logging;
 using Prism.Commands;
 
 namespace DbMonitorWPF.ViewModels
 {
+  /// <summary>
+  /// Verwaltet die Ansicht und Aktualisierung der Datenbankprozesse.
+  /// </summary>
   public class ProzesseViewModel : ViewModelBase
   {
+    #region Felder
+
     private readonly ILogger _log;
     private readonly DbQuery _dbQuery;
     private V_PROCESS _ausgewaehlterProzess;
-    private string _filterTextProzesse;
+    private string _filterTextProzesse = string.Empty;
     private string _statusProzesse;
-    private bool _istTop20Modus = false;
+    private bool _istTop20Modus;
 
-    public bool IstTop20Modus => _istTop20Modus;
+    #endregion
 
-    public ICommand AlleProzesseLadenBefehl { get; }
-    public ICommand LadeTopProzesseBefehl { get; }
-    public ICommand ProzesseAktualisierenBefehl { get; }
-
-    public ObservableCollection<V_PROCESS> Prozesse { get; }
-    public ICollectionView ProzesseAnsicht { get; }
+    #region Konstruktor
 
     public ProzesseViewModel(DbQuery dbQuery, ILogger<ProzesseViewModel> log)
     {
@@ -43,29 +44,46 @@ namespace DbMonitorWPF.ViewModels
       ProzesseAktualisierenBefehl = new DelegateCommand(ProzesseAktualisierenAusfuehren);
     }
 
-    // --- ДОБАВЛЕННЫЙ МЕТОД для MainViewModel ---
-    public void SortiereNachSpeicher()
-    {
-      LadeTopProzesseAusfuehren();
-    }
+    #endregion
+
+    #region Eigenschaften
+
+    public ObservableCollection<V_PROCESS> Prozesse { get; }
+    public ICollectionView ProzesseAnsicht { get; }
+
+    public bool IstTop20Modus => _istTop20Modus;
 
     public V_PROCESS AusgewaehlterProzess
     {
       get => _ausgewaehlterProzess;
-      set { _ausgewaehlterProzess = value; OnPropertyChanged(); }
+      set => SetProperty(ref _ausgewaehlterProzess, value);
     }
 
     public string FilterTextProzesse
     {
       get => _filterTextProzesse;
-      set { _filterTextProzesse = value; OnPropertyChanged(); ProzesseAnsicht?.Refresh(); }
+      set
+      {
+        if (SetProperty(ref _filterTextProzesse, value))
+          ProzesseAnsicht?.Refresh();
+      }
     }
 
     public string StatusProzesse
     {
       get => _statusProzesse;
-      set { _statusProzesse = value; OnPropertyChanged(); }
+      set => SetProperty(ref _statusProzesse, value);
     }
+
+    public ICommand AlleProzesseLadenBefehl { get; }
+    public ICommand LadeTopProzesseBefehl { get; }
+    public ICommand ProzesseAktualisierenBefehl { get; }
+
+    #endregion
+
+    #region Methoden
+
+    public void SortiereNachSpeicher() => LadeTopProzesseAusfuehren();
 
     private void ProzesseAktualisierenAusfuehren()
     {
@@ -95,12 +113,22 @@ namespace DbMonitorWPF.ViewModels
       UpdateCollection(liste, "Prozesse");
     }
 
+    public void AktualisierenIntern(List<V_PROCESS> daten)
+    {
+      if (_istTop20Modus) return; // Modus beibehalten
+
+      Application.Current.Dispatcher.Invoke(() =>
+      {
+        CollectionHelper.SyncForce(Prozesse, daten);
+        StatusProzesse = $"{Prozesse.Count} Prozesse";
+      });
+    }
+
     private void UpdateCollection(List<V_PROCESS> liste, string statusBase)
     {
       Application.Current.Dispatcher.Invoke(() =>
       {
-        Prozesse.Clear();
-        foreach (var p in liste) Prozesse.Add(p);
+        CollectionHelper.SyncForce(Prozesse, liste);
         ProzesseAnsicht?.Refresh();
         StatusProzesse = $"{liste.Count} {statusBase}";
       });
@@ -121,19 +149,6 @@ namespace DbMonitorWPF.ViewModels
       return false;
     }
 
-    public void AktualisierenIntern(List<V_PROCESS> daten)
-    {
-      Application.Current.Dispatcher.Invoke(() =>
-      {
-        // Если мы в режиме "Топ", не перезаписываем его на "Все" при авто-апдейте
-        if (!_istTop20Modus)
-        {
-          Prozesse.Clear();
-          foreach (var item in daten) Prozesse.Add(item);
-          ProzesseAnsicht?.Refresh();
-          StatusProzesse = $"{Prozesse.Count} Prozesse";
-        }
-      });
-    }
+    #endregion
   }
 }

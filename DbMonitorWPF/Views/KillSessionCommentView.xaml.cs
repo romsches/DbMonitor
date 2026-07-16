@@ -3,7 +3,7 @@
 namespace DbMonitorWPF.Views
 {
   /// <summary>
-  /// Code-Behind für die KillSessionCommentView.
+  /// Interaktionslogik für KillSessionCommentView.xaml.
   /// Dient als Eingabedialog für Kommentare beim Beenden einer Sitzung.
   /// </summary>
   public partial class KillSessionCommentView : Window
@@ -20,7 +20,7 @@ namespace DbMonitorWPF.Views
     #region Konstruktor
 
     /// <summary>
-    /// Initialisiert eine neue Instanz der <see cref="KillSessionCommentView"/> Klasse.
+    /// Initialisiert eine neue Instanz der <see cref="KillSessionCommentView"/>-Klasse.
     /// </summary>
     public KillSessionCommentView()
     {
@@ -32,7 +32,7 @@ namespace DbMonitorWPF.Views
     #region Event-Handler
 
     /// <summary>
-    /// Schließt den Dialog mit einem positiven Ergebnis.
+    /// Schließt den Dialog erfolgreich und setzt das Dialogergebnis auf 'true'.
     /// </summary>
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
@@ -40,7 +40,7 @@ namespace DbMonitorWPF.Views
     }
 
     /// <summary>
-    /// Schließt den Dialog mit einem negativen Ergebnis.
+    /// Schließt den Dialog abbrechend und setzt das Dialogergebnis auf 'false'.
     /// </summary>
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {

@@ -3,7 +3,7 @@
 namespace DbMonitorWPF.Views
 {
   /// <summary>
-  /// Code-Behind für die DashboardView.
+  /// Interaktionslogik für DashboardView.xaml.
   /// Dient als zentrale Übersichtsansicht für den Datenbank-Status und Monitoring-Metriken.
   /// </summary>
   public partial class DashboardView : UserControl

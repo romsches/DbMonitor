@@ -1,4 +1,7 @@
 ﻿using System;
+using System.ComponentModel;
+using System.Timers;
+using System.Windows;
 using System.Windows.Input;
 using DbMonitorData;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,9 +14,9 @@ namespace DbMonitorWPF.ViewModels
     #region Felder
 
     private readonly IServiceProvider _serviceProvider;
+    private readonly Timer _aktualisierungsTimer;
     private int _aktiverTabIndex;
-    private string _globalerStatusText = string.Empty;
-    private System.Timers.Timer _aktualisierungsTimer;
+    private string _globalerStatusText = "Bereit";
 
     #endregion
 
@@ -39,36 +42,17 @@ namespace DbMonitorWPF.ViewModels
       ProzesseVm = prozesseVm;
       DashboardVm = dashboardVm;
 
-      // Navigations-Befehle
-      WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
-      WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
-      WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
-      WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
-      WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
+      InitializeCommands();
+      SubscribeToStatusChanges();
 
-      // Analyse-Befehle für Dashboard
-      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
-      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
-
-      LoadedBefehl = new DelegateCommand(OnLoaded);
-      UnloadedBefehl = new DelegateCommand(OnUnloaded);
-
-      // Status-Abonnements
-      SitzungenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SitzungenVm.StatusSitzungen)) GlobalenStatusTextAktualisieren(); };
-      SperrenVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SperrenVm.StatusSperren)) GlobalenStatusTextAktualisieren(); };
-      JobsVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(JobsVm.StatusJobs)) GlobalenStatusTextAktualisieren(); };
-      AuditLogVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(AuditLogVm.Status)) GlobalenStatusTextAktualisieren(); };
-      SqlhistorieVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SqlhistorieVm.StatusSql)) GlobalenStatusTextAktualisieren(); };
-      ProzesseVm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ProzesseVm.StatusProzesse)) GlobalenStatusTextAktualisieren(); };
-
-      _aktualisierungsTimer = new System.Timers.Timer(30_000);
-      _aktualisierungsTimer.Elapsed += (_, __) => TimerZyklusAusfuehren();
+      _aktualisierungsTimer = new Timer(30_000);
       _aktualisierungsTimer.AutoReset = true;
+      _aktualisierungsTimer.Elapsed += (s, e) => TimerZyklusAusfuehren();
     }
 
     #endregion
 
-    #region Tab-ViewModels
+    #region Eigenschaften
 
     public SitzungenViewModel SitzungenVm { get; }
     public SperrenViewModel SperrenVm { get; }
@@ -78,28 +62,14 @@ namespace DbMonitorWPF.ViewModels
     public ProzesseViewModel ProzesseVm { get; }
     public DashboardViewModel DashboardVm { get; }
 
-    #endregion
-
-    #region Befehle
-
-    public ICommand WechsleZuSitzungenBefehl { get; }
-    public ICommand WechsleZuSqlBefehl { get; }
-    public ICommand WechsleZuProzesseBefehl { get; }
-    public ICommand WechsleZuJobsBefehl { get; }
-    public ICommand WechsleZuSperrenBefehl { get; }
-    public ICommand LadeTopSqlBefehl { get; }
-    public ICommand LadeTopProzesseBefehl { get; }
-    public ICommand LoadedBefehl { get; }
-    public ICommand UnloadedBefehl { get; }
-
-    #endregion
-
-    #region Eigenschaften
-
     public int AktiverTabIndex
     {
       get => _aktiverTabIndex;
-      set { SetProperty(ref _aktiverTabIndex, value); GlobalenStatusTextAktualisieren(); }
+      set
+      {
+        if (SetProperty(ref _aktiverTabIndex, value))
+          GlobalenStatusTextAktualisieren();
+      }
     }
 
     public string GlobalerStatusText
@@ -110,13 +80,41 @@ namespace DbMonitorWPF.ViewModels
 
     #endregion
 
-    #region Private Methoden – Lifecycle
+    #region Befehle
+
+    public ICommand WechsleZuSitzungenBefehl { get; private set; }
+    public ICommand WechsleZuSqlBefehl { get; private set; }
+    public ICommand WechsleZuProzesseBefehl { get; private set; }
+    public ICommand WechsleZuJobsBefehl { get; private set; }
+    public ICommand WechsleZuSperrenBefehl { get; private set; }
+    public ICommand LadeTopSqlBefehl { get; private set; }
+    public ICommand LadeTopProzesseBefehl { get; private set; }
+    public ICommand LoadedBefehl { get; private set; }
+    public ICommand UnloadedBefehl { get; private set; }
+
+    private void InitializeCommands()
+    {
+      WechsleZuSitzungenBefehl = new DelegateCommand(() => AktiverTabIndex = 1);
+      WechsleZuSqlBefehl = new DelegateCommand(() => AktiverTabIndex = 2);
+      WechsleZuProzesseBefehl = new DelegateCommand(() => AktiverTabIndex = 3);
+      WechsleZuJobsBefehl = new DelegateCommand(() => AktiverTabIndex = 4);
+      WechsleZuSperrenBefehl = new DelegateCommand(() => AktiverTabIndex = 5);
+
+      LadeTopSqlBefehl = new DelegateCommand(LadeTopSqlAusfuehren);
+      LadeTopProzesseBefehl = new DelegateCommand(LadeTopProzesseAusfuehren);
+
+      LoadedBefehl = new DelegateCommand(OnLoaded);
+      UnloadedBefehl = new DelegateCommand(OnUnloaded);
+    }
+
+    #endregion
+
+    #region Methoden – Lifecycle & Daten
 
     private void OnLoaded()
     {
       AlleTabsAktualisieren();
       _aktualisierungsTimer.Start();
-      GlobalenStatusTextAktualisieren();
     }
 
     private void OnUnloaded()
@@ -124,10 +122,6 @@ namespace DbMonitorWPF.ViewModels
       _aktualisierungsTimer.Stop();
       _aktualisierungsTimer.Dispose();
     }
-
-    #endregion
-
-    #region Private Methoden – Daten
 
     private void AlleTabsAktualisieren()
     {
@@ -139,7 +133,6 @@ namespace DbMonitorWPF.ViewModels
       ((ICommand)ProzesseVm?.ProzesseAktualisierenBefehl)?.Execute(null);
       DashboardVm?.Refresh();
     }
-
     private void TimerZyklusAusfuehren()
     {
       try
@@ -155,7 +148,7 @@ namespace DbMonitorWPF.ViewModels
         var sqlDaten = db.GetAllSqlList();
         var prozesse = db.GetAllProcessesList();
 
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.Invoke(() =>
         {
           SitzungenVm?.AktualisierenIntern(sitzungen);
           SperrenVm?.AktualisierenIntern(sperren);
@@ -169,29 +162,33 @@ namespace DbMonitorWPF.ViewModels
       }
       catch (Exception ex)
       {
-        System.Diagnostics.Debug.WriteLine($"Timer-Fehler: {ex.Message}");
+        System.Diagnostics.Debug.WriteLine(ex.Message);
       }
-    }
-
-    private void LadeTopSqlAusfuehren()
-    {
-      ((ICommand)SqlhistorieVm?.LadeTopSqlBefehl)?.Execute(null);
-      AktiverTabIndex = 2;
-    }
-
-    private void LadeTopProzesseAusfuehren()
-    {
-      ((ICommand)ProzesseVm?.LadeTopProzesseBefehl)?.Execute(null);
-      AktiverTabIndex = 3;
     }
 
     #endregion
 
-    #region Private Methoden – Status
+    #region Status-Logik
+
+    private void SubscribeToStatusChanges()
+    {
+      SitzungenVm.PropertyChanged += HandleStatus;
+      SperrenVm.PropertyChanged += HandleStatus;
+      JobsVm.PropertyChanged += HandleStatus;
+      AuditLogVm.PropertyChanged += HandleStatus;
+      SqlhistorieVm.PropertyChanged += HandleStatus;
+      ProzesseVm.PropertyChanged += HandleStatus;
+    }
+
+    private void HandleStatus(object sender, PropertyChangedEventArgs e)
+    {
+      GlobalenStatusTextAktualisieren();
+    }
 
     private void GlobalenStatusTextAktualisieren()
     {
       string status = null;
+
       switch (_aktiverTabIndex)
       {
         case 1: status = SitzungenVm?.StatusSitzungen; break;
@@ -201,9 +198,12 @@ namespace DbMonitorWPF.ViewModels
         case 5: status = SperrenVm?.StatusSperren; break;
         case 6: status = AuditLogVm?.Status; break;
       }
-      GlobalerStatusText = string.IsNullOrEmpty(status) ? "Bereit" : status;
+
+      GlobalerStatusText = string.IsNullOrWhiteSpace(status) ? "Bereit" : status;
     }
 
+    private void LadeTopSqlAusfuehren() { SqlhistorieVm?.LadeTopSqlBefehl?.Execute(null); AktiverTabIndex = 2; }
+    private void LadeTopProzesseAusfuehren() { ProzesseVm?.LadeTopProzesseBefehl?.Execute(null); AktiverTabIndex = 3; }
 
     #endregion
   }

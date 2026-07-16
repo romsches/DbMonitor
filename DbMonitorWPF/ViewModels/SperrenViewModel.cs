@@ -14,21 +14,26 @@ using Prism.Commands;
 
 namespace DbMonitorWPF.ViewModels
 {
+  /// <summary>
+  /// ViewModel zur Verwaltung und Überwachung der Datenbank-Sperren.
+  /// </summary>
   public class SperrenViewModel : SqlBaseViewModel
   {
+    #region Felder
+
     private readonly ILogger _log;
     private readonly DbQuery _dbQuery;
     private string _filterTextSperren = string.Empty;
     private string _statusSperren = string.Empty;
     private V_LOCK _ausgewaehlteSperre;
 
-    public ObservableCollection<V_LOCK> Sperren { get; }
-    public ICollectionView SperrenAnsicht { get; }
+    #endregion
 
-    public ICommand SperrenAktualisierenBefehl { get; }
-    public ICommand SperreBeendenBefehl { get; }
-    public ICommand KopiereSperrenSqlBefehl { get; }
+    #region Konstruktor
 
+    /// <summary>
+    /// Initialisiert eine neue Instanz des SperrenViewModel.
+    /// </summary>
     public SperrenViewModel(DbQuery dbQuery, ILogger<SperrenViewModel> log)
     {
       _dbQuery = dbQuery;
@@ -42,6 +47,17 @@ namespace DbMonitorWPF.ViewModels
       SperreBeendenBefehl = new DelegateCommand(SperreBeendenAusfuehren, () => AusgewaehlteSperre != null);
       KopiereSperrenSqlBefehl = new DelegateCommand(KopiereSperrenSqlAusfuehren, () => !string.IsNullOrEmpty(AktuellerSqlText));
     }
+
+    #endregion
+
+    #region Eigenschaften
+
+    public ObservableCollection<V_LOCK> Sperren { get; }
+    public ICollectionView SperrenAnsicht { get; }
+
+    public ICommand SperrenAktualisierenBefehl { get; }
+    public ICommand SperreBeendenBefehl { get; }
+    public ICommand KopiereSperrenSqlBefehl { get; }
 
     public V_LOCK AusgewaehlteSperre
     {
@@ -70,6 +86,13 @@ namespace DbMonitorWPF.ViewModels
       set { _statusSperren = value; OnPropertyChanged(); }
     }
 
+    #endregion
+
+    #region Methoden
+
+    /// <summary>
+    /// Lädt die aktuelle Liste der Sperren aus der Datenbank.
+    /// </summary>
     private void SperrenAktualisierenAusfuehren()
     {
       var vorherigeSid = AusgewaehlteSperre?.SID;
@@ -92,6 +115,9 @@ namespace DbMonitorWPF.ViewModels
       });
     }
 
+    /// <summary>
+    /// Lädt den SQL-Text für die aktuell ausgewählte Sperre.
+    /// </summary>
     private void AusgewaehlteSperreSqlLaden()
     {
       if (_ausgewaehlteSperre == null)
@@ -104,12 +130,18 @@ namespace DbMonitorWPF.ViewModels
       ((DelegateCommand)KopiereSperrenSqlBefehl).RaiseCanExecuteChanged();
     }
 
+    /// <summary>
+    /// Kopiert den aktuellen SQL-Text in die Zwischenablage.
+    /// </summary>
     private void KopiereSperrenSqlAusfuehren()
     {
       if (!string.IsNullOrEmpty(AktuellerSqlText))
         Clipboard.SetText(AktuellerSqlText);
     }
 
+    /// <summary>
+    /// Beendet die ausgewählte Sperre durch Session-Terminierung.
+    /// </summary>
     private void SperreBeendenAusfuehren()
     {
       if (_ausgewaehlteSperre == null) return;
@@ -118,7 +150,7 @@ namespace DbMonitorWPF.ViewModels
       if (commentDialog.ShowDialog() != true) return;
 
       var result = MessageBox.Show(
-          $"Вы действительно хотите снять блокировку SID={_ausgewaehlteSperre.SID}?",
+          $"Möchten Sie die Sperre wirklich aufheben? SID={_ausgewaehlteSperre.SID}?",
           "Sperrung beenden", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
       if (result != MessageBoxResult.Yes) return;
@@ -146,6 +178,9 @@ namespace DbMonitorWPF.ViewModels
       }
     }
 
+    /// <summary>
+    /// Filterlogik für die Sperren-Ansicht.
+    /// </summary>
     private bool FilterSperrenDelegate(object obj)
     {
       if (string.IsNullOrWhiteSpace(FilterTextSperren)) return true;
@@ -158,6 +193,9 @@ namespace DbMonitorWPF.ViewModels
       return false;
     }
 
+    /// <summary>
+    /// Aktualisiert die Sperren-Liste intern von externen Triggern.
+    /// </summary>
     public void AktualisierenIntern(List<V_LOCK> daten)
     {
       var vorherigeSid = AusgewaehlteSperre?.SID;
@@ -177,5 +215,7 @@ namespace DbMonitorWPF.ViewModels
         StatusSperren = $"{Sperren.Count} aktive Sperren";
       });
     }
+
+    #endregion
   }
 }

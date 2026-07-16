@@ -8,17 +8,11 @@ namespace DbMonitorWPF.Helpers
   /// </summary>
   public static class SqlFormatterHelper
   {
-    #region Konstanten
-
     private const string WarningMarker = "--WARNING!";
-
-    #endregion
 
     /// <summary>
     /// Formatiert einen rohen SQL-String und bereinigt ihn von Warnmeldungen.
     /// </summary>
-    /// <param name="rawSql">Der zu formatierende SQL-Text.</param>
-    /// <returns>Ein formatierter und bereinigter SQL-String.</returns>
     public static string Format(string rawSql)
     {
       if (string.IsNullOrWhiteSpace(rawSql))
@@ -28,17 +22,25 @@ namespace DbMonitorWPF.Helpers
 
       string sqlToFormat = CleanSqlContent(rawSql);
 
-      var formatter = new SqlFormattingManager();
-      return formatter.Format(sqlToFormat).Trim();
+      // Die Bibliothek kann Exceptions werfen, wenn das SQL extrem kaputt ist.
+      try
+      {
+        var formatter = new SqlFormattingManager();
+        return formatter.Format(sqlToFormat).Trim();
+      }
+      catch
+      {
+        // Fallback: Bei Formatierungsfehlern das Original-SQL zurückgeben
+        return sqlToFormat.Trim();
+      }
     }
 
     /// <summary>
-    /// Bereinigt den SQL-Input von spezifischen Warnhinweisen, falls vorhanden.
+    /// Bereinigt den SQL-Input von spezifischen Warnhinweisen.
     /// </summary>
     private static string CleanSqlContent(string sql)
     {
       int warningIndex = sql.IndexOf(WarningMarker, StringComparison.OrdinalIgnoreCase);
-
       if (warningIndex < 0)
       {
         return sql;
@@ -52,8 +54,14 @@ namespace DbMonitorWPF.Helpers
         return sql.Substring(selectIndex);
       }
 
-      // Fallback: Schneide den Warnungsteil ab
-      return sql.Substring(warningIndex + WarningMarker.Length);
+      // Sicherer Schnitt: Prüfen, ob noch Restinhalt vorhanden ist
+      int startOfActualSql = warningIndex + WarningMarker.Length;
+      if (startOfActualSql < sql.Length)
+      {
+        return sql.Substring(startOfActualSql).TrimStart();
+      }
+
+      return sql;
     }
   }
 }

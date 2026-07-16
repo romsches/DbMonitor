@@ -13,14 +13,24 @@ using Prism.Commands;
 
 namespace DbMonitorWPF.ViewModels
 {
+  /// <summary>
+  /// ViewModel für die Verwaltung und Überwachung von Datenbank-Jobs.
+  /// </summary>
   public class JobsViewModel : ViewModelBase
   {
+    #region Felder
+
     private readonly DbQuery _dbQuery;
     private readonly ILogger _log;
+
     private string _filterTextJobs = string.Empty;
     private string _statusJobs;
     private string _statusJobProtokolle;
     private V_JOB _ausgewaehlterJob;
+
+    #endregion
+
+    #region Konstruktor
 
     public JobsViewModel(DbQuery dbQuery, ILogger<JobsViewModel> log)
     {
@@ -38,6 +48,10 @@ namespace DbMonitorWPF.ViewModels
       FilterFehlerhafteJobsCommand = new DelegateCommand(FilterFehlerhafteAusfuehren);
     }
 
+    #endregion
+
+    #region Eigenschaften
+
     public ObservableCollection<V_JOB> Jobs { get; }
     public ObservableCollection<V_JOB> AuffaelligeJobs { get; }
     public ObservableCollection<V_JOB_RUN_DETAILS> AusgewaehlteJobProtokolle { get; }
@@ -48,32 +62,47 @@ namespace DbMonitorWPF.ViewModels
       get => _ausgewaehlterJob;
       set
       {
-        _ausgewaehlterJob = value;
-        OnPropertyChanged();
-        if (value != null) JobProtokolleLaden(value);
+        if (SetProperty(ref _ausgewaehlterJob, value) && value != null)
+        {
+          JobProtokolleLaden(value);
+        }
       }
     }
 
     public string FilterTextJobs
     {
       get => _filterTextJobs;
-      set { _filterTextJobs = value; OnPropertyChanged(); JobsAnsicht?.Refresh(); }
+      set
+      {
+        if (SetProperty(ref _filterTextJobs, value))
+        {
+          JobsAnsicht?.Refresh();
+        }
+      }
     }
 
     public string StatusJobs
     {
       get => _statusJobs;
-      set { _statusJobs = value; OnPropertyChanged(); }
+      set => SetProperty(ref _statusJobs, value);
     }
 
     public string StatusJobProtokolle
     {
       get => _statusJobProtokolle;
-      set { _statusJobProtokolle = value; OnPropertyChanged(); }
+      set => SetProperty(ref _statusJobProtokolle, value);
     }
+
+    #endregion
+
+    #region Befehle
 
     public ICommand JobsAktualisierenBefehl { get; }
     public ICommand FilterFehlerhafteJobsCommand { get; }
+
+    #endregion
+
+    #region Methoden
 
     private void JobsAktualisierenAusfuehren()
     {
@@ -82,14 +111,11 @@ namespace DbMonitorWPF.ViewModels
 
       Application.Current.Dispatcher.Invoke(() =>
       {
-        Jobs.Clear();
-        foreach (var j in alleJobs) Jobs.Add(j);
-
-        AuffaelligeJobs.Clear();
-        foreach (var j in auffaelligJobs) AuffaelligeJobs.Add(j);
+        CollectionHelper.SyncForce(Jobs, alleJobs);
+        CollectionHelper.SyncForce(AuffaelligeJobs, auffaelligJobs);
 
         JobsAnsicht?.Refresh();
-        StatusJobs = $"{alleJobs.Count} Jobs ({auffaelligJobs.Count} auffällig)";
+        StatusJobs = $"{Jobs.Count} Jobs ({AuffaelligeJobs.Count} auffällig)";
       });
     }
 
@@ -99,8 +125,7 @@ namespace DbMonitorWPF.ViewModels
 
       Application.Current.Dispatcher.Invoke(() =>
       {
-        AusgewaehlteJobProtokolle.Clear();
-        foreach (var p in protokolle) AusgewaehlteJobProtokolle.Add(p);
+        CollectionHelper.SyncForce(AusgewaehlteJobProtokolle, protokolle);
 
         StatusJobProtokolle = protokolle.Count > 0
             ? $"{protokolle.Count} Protokolle für {job.JOB_NAME}"
@@ -110,11 +135,7 @@ namespace DbMonitorWPF.ViewModels
 
     private void FilterFehlerhafteAusfuehren()
     {
-      JobsAnsicht.Filter = (obj) =>
-      {
-        if (obj is V_JOB j) return j.FAILURE_COUNT > 0 || j.STATUS != "SUCCEEDED";
-        return false;
-      };
+      JobsAnsicht.Filter = obj => obj is V_JOB j && (j.FAILURE_COUNT > 0 || j.STATUS != "SUCCEEDED");
     }
 
     private bool FilterJobsDelegate(object obj)
@@ -134,30 +155,27 @@ namespace DbMonitorWPF.ViewModels
 
     public void AktualisierenIntern(List<V_JOB> alleJobs, List<V_JOB> auffaelligJobs)
     {
-      if (alleJobs != null && alleJobs.Count > 0)
-      {
-        var ausgewaehlterJobName = _ausgewaehlterJob?.JOB_NAME;
+      if (alleJobs == null || alleJobs.Count == 0) return;
 
+      string ausgewaehlterName = _ausgewaehlterJob?.JOB_NAME;
+
+      Application.Current.Dispatcher.Invoke(() =>
+      {
         CollectionHelper.SyncForce(Jobs, alleJobs);
         CollectionHelper.SyncForce(AuffaelligeJobs, auffaelligJobs ?? new List<V_JOB>());
 
         JobsAnsicht?.Refresh();
 
-        if (ausgewaehlterJobName != null)
+        if (ausgewaehlterName != null)
         {
-          foreach (var job in Jobs)
-          {
-            if (job.JOB_NAME == ausgewaehlterJobName)
-            {
-              AusgewaehlterJob = job;
-              break;
-            }
-          }
+          AusgewaehlterJob = Jobs.FirstOrDefault(j => j.JOB_NAME == ausgewaehlterName);
         }
-      }
 
-      StatusJobs = StatusHelper.FormatStatus(Jobs.Count, "Jobs") +
-                   $" ({auffaelligJobs?.Count ?? 0} auffällig)";
+        StatusJobs = StatusHelper.FormatStatus(Jobs.Count, "Jobs") +
+                     $" ({AuffaelligeJobs.Count} auffällig)";
+      });
     }
+
+    #endregion
   }
 }

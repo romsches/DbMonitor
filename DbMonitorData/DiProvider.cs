@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DbMonitorData
 {
@@ -15,7 +16,7 @@ namespace DbMonitorData
     {
       if (services == null)
       {
-        return;
+        throw new ArgumentNullException(nameof(services));
       }
 
       // Registrierung als Transient, da DbQuery-Instanzen bei Bedarf neu erzeugt werden sollten,
