@@ -19,7 +19,6 @@ namespace DbMonitorWPF
       services.AddSingleton<OracleConnectionProvider>();
       services.AddTransient<DbQuery>();
 
-      // Tab-ViewModels als Singleton — damit MainViewModel immer dieselbe Instanz bekommt
       services.AddSingleton<SitzungenViewModel>();
       services.AddSingleton<SperrenViewModel>();
       services.AddSingleton<ProzesseViewModel>();
@@ -28,7 +27,6 @@ namespace DbMonitorWPF
       services.AddSingleton<AuditLogViewModel>();
       services.AddSingleton<DashboardViewModel>();
 
-      // MainViewModel bekommt alle Tab-VMs per DI injiziert
       services.AddSingleton<MainViewModel>();
 
       services.AddTransient<MainView>();
@@ -43,7 +41,7 @@ namespace DbMonitorWPF
       try
       {
         var connectionProvider = ServiceProvider.GetRequiredService<OracleConnectionProvider>();
-        connectionProvider.ConnectFromConfig("ctssConnectionString");
+        connectionProvider.ConnectFromConfig("defaultConnectionString"); // ← исправлено
 
         var window = new Window();
         window.Content = ServiceProvider.GetRequiredService<MainView>();
