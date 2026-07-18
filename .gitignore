@@ -25,8 +25,6 @@ tnsnames.ora
 ojdbc.properties
 
 # Konfigurationsdateien mit sensiblen Daten
-# App.config wird versioniert aber ohne echte Zugangsdaten
-# Lokale Überschreibungen ignorieren
 *.local.config
 appsettings.local.json
 secrets.json
@@ -45,6 +43,11 @@ ReleaseNotes.pdf
 *.cache
 Thumbs.db
 .DS_Store
+
+# Log-Dateien der Anwendung
+*.txt
+BSD_*.txt
+DbMonitor*.txt
 
 # Projektspezifisch
 Images/

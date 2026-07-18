@@ -10,9 +10,9 @@ using System.Windows;
 [assembly: AssemblyTitle("DbMonitor")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("DRK-Blutspendedienst")] // (Baden-Württemberg - Hessen gemeinnützige GmbH, Nord-Ost gemeinnützige GmbH)
+[assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("DbMonitor")]
-[assembly: AssemblyCopyright("Copyright © DRK-Blutspendedienst 2026")]
+[assembly: AssemblyCopyright("Copyright © 2026")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
